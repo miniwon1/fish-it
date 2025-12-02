@@ -1,7 +1,7 @@
 -------------------------------------------
------ Fish It COMPLETE Edition v3.0
------ FIXED: Complete Minigame System
------ Proper Fish Catching Mechanic
+----- Fish It DEBUG Edition v3.1
+----- Auto-Detect Correct Minigame Remote
+----- Full Debug Logging
 -------------------------------------------
 
 -- Load Rayfield UI Library
@@ -44,19 +44,50 @@ if not success or not net then
     return
 end
 
--- Fishing Remotes (COMPLETE LIST)
+-- Core Fishing Remotes
 local rodRemote = net:WaitForChild("RF/ChargeFishingRod", 10)
 local miniGameRemote = net:WaitForChild("RF/RequestFishingMinigameStarted", 10)
 local finishRemote = net:WaitForChild("RE/FishingCompleted", 10)
 local equipRemote = net:WaitForChild("RE/EquipToolFromHotbar", 10)
 local unequipRemote = net:WaitForChild("RE/UnequipTool", 10)
 
--- Minigame Remotes (CRITICAL)
-local reelClickRemote = net:FindFirstChild("RE/FishingReelInput") or net:FindFirstChild("RE/ReelClick")
-local minigameProgressRemote = net:FindFirstChild("RE/FishingMinigameProgress")
-
 -- Text Effect
 local REReplicateTextEffect = net:WaitForChild("RE/ReplicateTextEffect", 10)
+
+-------------------------------------------
+----- SCAN ALL POSSIBLE REMOTES
+-------------------------------------------
+print("=== SCANNING ALL REMOTES ===")
+local AllRemotes = {}
+
+for _, remote in pairs(net:GetDescendants()) do
+    if remote:IsA("RemoteEvent") or remote:IsA("RemoteFunction") then
+        table.insert(AllRemotes, {
+            Name = remote.Name,
+            Path = remote:GetFullName(),
+            Type = remote.ClassName,
+            Object = remote
+        })
+        print(remote.ClassName .. ": " .. remote.Name)
+    end
+end
+
+-- Try to find minigame-related remotes
+local MinigameRemotes = {
+    Progress = net:FindFirstChild("RE/FishingMinigameProgress"),
+    Click = net:FindFirstChild("RE/FishingReelInput"),
+    Reel = net:FindFirstChild("RE/ReelClick"),
+    Input = net:FindFirstChild("RE/FishingInput"),
+    Complete = net:FindFirstChild("RE/FishingMinigameComplete"),
+    Success = net:FindFirstChild("RE/FishingSuccess"),
+}
+
+print("=== MINIGAME REMOTES FOUND ===")
+for name, remote in pairs(MinigameRemotes) do
+    if remote then
+        print(name .. ": " .. remote.Name)
+    end
+end
 
 -------------------------------------------
 ----- Configuration
@@ -65,21 +96,19 @@ local Config = {
     AutoFish = false,
     AutoSell = false,
     AutoFavorite = false,
-    AntiStuck = true,
+    DebugMode = true, -- Enable debug logging
     
     -- Speed Settings
     EquipDelay = 0.3,
     ChargeDelay = 0.5,
     CastDelay = 0.3,
     
-    -- Minigame Settings (CRITICAL)
-    AutoClick = true,
-    ClickSpeed = 0.08, -- Click every 0.08s (fast clicking)
-    MinigameClicks = 25, -- Number of clicks for minigame
-    MinigameWaitTime = 3, -- Max time to wait for minigame
+    -- Minigame Settings
+    ReelSpeed = 0.1, -- Time between reel attempts
+    ReelAttempts = 30, -- Number of reel attempts
+    WaitAfterBite = 0.2, -- Wait before starting reel
     
     LoopDelay = 0.5,
-    UnstuckDelay = 10,
     
     -- Perfect Cast
     PerfectCast = true,
@@ -131,10 +160,20 @@ local Stats = {
     StartTime = os.time(),
     SessionTime = "0m 0s",
     Errors = 0,
-    UnstuckCount = 0,
-    MinigameSuccess = 0,
-    MinigameFail = 0
+    BiteDetected = 0,
+    ReelAttempts = 0,
+    SuccessfulCatches = 0
 }
+
+-------------------------------------------
+----- Debug Logger
+-------------------------------------------
+local function DebugLog(category, message)
+    if Config.DebugMode then
+        local timestamp = os.date("%H:%M:%S")
+        print(string.format("[%s][%s] %s", timestamp, category, message))
+    end
+end
 
 -------------------------------------------
 ----- Anti-AFK System
@@ -159,14 +198,6 @@ LocalPlayer.OnTeleport:Connect(function(State)
     end
 end)
 
-task.spawn(function()
-    while task.wait(10) do
-        if not LocalPlayer:IsDescendantOf(game) then
-            TeleportService:Teleport(game.PlaceId)
-        end
-    end
-end)
-
 -------------------------------------------
 ----- FPS Boost
 -------------------------------------------
@@ -184,9 +215,6 @@ local function BoostFPS()
         end)
     end
     
-    local Lighting = game:GetService("Lighting")
-    Lighting.GlobalShadows = false
-    Lighting.FogEnd = 9e9
     settings().Rendering.QualityLevel = "Level01"
     
     Rayfield:Notify({
@@ -198,7 +226,36 @@ local function BoostFPS()
 end
 
 -------------------------------------------
------ Anti-Stuck System
+----- Rod Detection
+-------------------------------------------
+local function GetCurrentRod()
+    pcall(function()
+        local backpack = LocalPlayer:WaitForChild("PlayerGui", 5):WaitForChild("Backpack", 5)
+        local display = backpack:WaitForChild("Display", 5)
+        
+        for _, tile in ipairs(display:GetChildren()) do
+            pcall(function()
+                local inner = tile:FindFirstChild("Inner")
+                if inner then
+                    local tags = inner:FindFirstChild("Tags")
+                    if tags then
+                        local itemName = tags:FindFirstChild("ItemName")
+                        if itemName and itemName:IsA("TextLabel") then
+                            local rodName = itemName.Text
+                            if RodDelays[rodName] then
+                                CurrentRod = rodName
+                                CurrentRodDelay = RodDelays[rodName]
+                            end
+                        end
+                    end
+                end
+            end)
+        end
+    end)
+end
+
+-------------------------------------------
+----- Anti-Stuck
 -------------------------------------------
 local function UnequipRod()
     pcall(function()
@@ -208,14 +265,7 @@ local function UnequipRod()
 end
 
 local function ForceUnstuck()
-    Stats.UnstuckCount = Stats.UnstuckCount + 1
-    
-    Rayfield:Notify({
-        Title = "Anti-Stuck",
-        Content = "Forcing unstuck...",
-        Duration = 2,
-        Image = 4483362458,
-    })
+    DebugLog("UNSTUCK", "Forcing unstuck...")
     
     UnequipRod()
     
@@ -229,164 +279,127 @@ local function ForceUnstuck()
     
     pcall(function()
         Humanoid:ChangeState(Enum.HumanoidStateType.Landed)
-        HumanoidRootPart.CFrame = HumanoidRootPart.CFrame + Vector3.new(0, 2, 0)
     end)
     
     task.wait(1)
 end
 
 -------------------------------------------
------ Rod Detection
--------------------------------------------
-local function GetCurrentRod()
-    local success = pcall(function()
-        local backpack = LocalPlayer:WaitForChild("PlayerGui", 5):WaitForChild("Backpack", 5)
-        local display = backpack:WaitForChild("Display", 5)
-        
-        for _, tile in ipairs(display:GetChildren()) do
-            if tile:IsA("Frame") or tile:IsA("GuiObject") then
-                pcall(function()
-                    local inner = tile:FindFirstChild("Inner")
-                    if inner then
-                        local tags = inner:FindFirstChild("Tags")
-                        if tags then
-                            local itemName = tags:FindFirstChild("ItemName")
-                            if itemName and itemName:IsA("TextLabel") then
-                                local rodName = itemName.Text
-                                if RodDelays[rodName] then
-                                    CurrentRod = rodName
-                                    CurrentRodDelay = RodDelays[rodName]
-                                    return true
-                                end
-                            end
-                        end
-                    end
-                end)
-            end
-        end
-    end)
-    
-    if not success then
-        CurrentRod = "Unknown"
-        CurrentRodDelay = 3.0
-    end
-end
-
-local function WatchRodChanges()
-    pcall(function()
-        local display = LocalPlayer.PlayerGui:WaitForChild("Backpack"):WaitForChild("Display")
-        display.ChildAdded:Connect(function()
-            task.wait(0.2)
-            GetCurrentRod()
-        end)
-    end)
-end
-
-WatchRodChanges()
-GetCurrentRod()
-
--------------------------------------------
------ MINIGAME SYSTEM (CRITICAL FIX)
--------------------------------------------
-local MinigameState = {
-    Active = false,
-    Completed = false,
-    ClickCount = 0
-}
-
--- Function to simulate clicking for minigame
-local function PerformMinigameClicks()
-    MinigameState.Active = true
-    MinigameState.ClickCount = 0
-    MinigameState.Completed = false
-    
-    print("[MINIGAME] Starting fast click sequence...")
-    
-    -- Fast click sequence
-    for i = 1, Config.MinigameClicks do
-        if not MinigameState.Active then break end
-        
-        pcall(function()
-            -- Try multiple methods to register clicks
-            
-            -- Method 1: Fire reel click remote if exists
-            if reelClickRemote then
-                reelClickRemote:FireServer()
-            end
-            
-            -- Method 2: Virtual mouse click
-            VirtualUser:Button1Down(Vector2.new(0,0))
-            task.wait(0.01)
-            VirtualUser:Button1Up(Vector2.new(0,0))
-            
-            -- Method 3: Simulate KeyCode.Space press (some games use this)
-            VirtualUser:TypeKey(" ")
-            
-            MinigameState.ClickCount = MinigameState.ClickCount + 1
-        end)
-        
-        task.wait(Config.ClickSpeed)
-    end
-    
-    print("[MINIGAME] Completed " .. MinigameState.ClickCount .. " clicks")
-    
-    -- Give server time to process
-    task.wait(0.5)
-    
-    -- Final finish signal
-    for i = 1, 3 do
-        pcall(function()
-            finishRemote:FireServer()
-        end)
-        task.wait(0.1)
-    end
-    
-    MinigameState.Completed = true
-    MinigameState.Active = false
-end
-
--------------------------------------------
------ FISH DETECTION & CATCH SYSTEM
+----- ADVANCED MINIGAME HANDLER (ALL METHODS)
 -------------------------------------------
 local FishingState = {
     Active = false,
     WaitingForBite = false,
     FishBit = false,
-    LastCatchTime = 0
+    Reeling = false
 }
 
--- Detect fish bite (Exclaim effect)
+-- Try ALL possible methods to complete minigame
+local function CompleteMinigame()
+    DebugLog("MINIGAME", "Starting minigame completion...")
+    FishingState.Reeling = true
+    
+    local attempts = 0
+    local maxAttempts = Config.ReelAttempts
+    
+    for i = 1, maxAttempts do
+        attempts = attempts + 1
+        Stats.ReelAttempts = Stats.ReelAttempts + 1
+        
+        pcall(function()
+            -- Method 1: Fire ALL found minigame remotes
+            for name, remote in pairs(MinigameRemotes) do
+                if remote then
+                    if remote:IsA("RemoteEvent") then
+                        remote:FireServer()
+                    elseif remote:IsA("RemoteFunction") then
+                        remote:InvokeServer()
+                    end
+                end
+            end
+            
+            -- Method 2: Fire finish remote
+            finishRemote:FireServer()
+            
+            -- Method 3: Simulate mouse clicks
+            VirtualUser:Button1Down(Vector2.new(0,0))
+            task.wait(0.01)
+            VirtualUser:Button1Up(Vector2.new(0,0))
+            
+            -- Method 4: Simulate space key
+            VirtualUser:TypeKey(" ")
+            
+            -- Method 5: Simulate E key (some games use this)
+            VirtualUser:TypeKey("e")
+        end)
+        
+        DebugLog("REEL", "Attempt " .. i .. "/" .. maxAttempts)
+        
+        task.wait(Config.ReelSpeed)
+    end
+    
+    DebugLog("MINIGAME", "Completed " .. attempts .. " reel attempts")
+    
+    -- Final finish signals
+    task.wait(0.3)
+    for i = 1, 5 do
+        pcall(function()
+            finishRemote:FireServer()
+        end)
+        task.wait(0.05)
+    end
+    
+    task.wait(0.5)
+    FishingState.Reeling = false
+end
+
+-------------------------------------------
+----- FISH BITE DETECTION
+-------------------------------------------
 REReplicateTextEffect.OnClientEvent:Connect(function(data)
     if not Config.AutoFish then return end
     if not FishingState.Active then return end
     if FishingState.FishBit then return end
     
-    -- Validate data
     if not data or not data.TextData then return end
     if data.TextData.EffectType ~= "Exclaim" then return end
     
-    -- Check if on player's head
     local myHead = Character and Character:FindFirstChild("Head")
     if not myHead or data.Container ~= myHead then return end
     
-    print("[FISH] Fish bite detected! Starting minigame...")
+    Stats.BiteDetected = Stats.BiteDetected + 1
+    DebugLog("BITE", "Fish bite detected! (#" .. Stats.BiteDetected .. ")")
     
     FishingState.FishBit = true
     FishingState.WaitingForBite = false
     
-    -- Perform minigame (fast clicking)
+    Rayfield:Notify({
+        Title = "Fish Bite!",
+        Content = "Starting reel...",
+        Duration = 1,
+        Image = 4483362458,
+    })
+    
     task.spawn(function()
+        task.wait(Config.WaitAfterBite)
+        
         local success = pcall(function()
-            PerformMinigameClicks()
+            CompleteMinigame()
         end)
         
-        if success and MinigameState.Completed then
+        if success then
+            Stats.SuccessfulCatches = Stats.SuccessfulCatches + 1
             Stats.FishCaught = Stats.FishCaught + 1
-            Stats.MinigameSuccess = Stats.MinigameSuccess + 1
-            print("[SUCCESS] Fish caught successfully!")
+            DebugLog("SUCCESS", "Fish caught! Total: " .. Stats.FishCaught)
+            
+            Rayfield:Notify({
+                Title = "Fish Caught!",
+                Content = "Total: " .. Stats.FishCaught,
+                Duration = 2,
+                Image = 4483362458,
+            })
         else
-            Stats.MinigameFail = Stats.MinigameFail + 1
-            print("[FAIL] Minigame failed")
+            DebugLog("FAIL", "Failed to catch fish")
         end
         
         task.wait(0.5)
@@ -395,7 +408,7 @@ REReplicateTextEffect.OnClientEvent:Connect(function(data)
 end)
 
 -------------------------------------------
------ COMPLETE AUTO FISHING SYSTEM
+----- MAIN AUTO FISHING LOOP
 -------------------------------------------
 local function StartAutoFish()
     if Config.AutoFish then 
@@ -411,9 +424,11 @@ local function StartAutoFish()
     Config.AutoFish = true
     GetCurrentRod()
     
+    DebugLog("START", "Auto Fish Started | Rod: " .. CurrentRod)
+    
     Rayfield:Notify({
         Title = "Auto Fish Started",
-        Content = "Rod: " .. CurrentRod .. " | Minigame: ON",
+        Content = "Debug Mode: ON | Rod: " .. CurrentRod,
         Duration = 3,
         Image = 4483362458,
     })
@@ -421,7 +436,6 @@ local function StartAutoFish()
     task.spawn(function()
         while Config.AutoFish do
             local success, err = pcall(function()
-                -- Verify character
                 if not Character or not Character.Parent then
                     Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
                     Humanoid = Character:WaitForChild("Humanoid")
@@ -430,29 +444,29 @@ local function StartAutoFish()
                     return
                 end
                 
-                print("[FISHING] Starting new fishing cycle...")
+                DebugLog("CYCLE", "Starting new fishing cycle")
                 
                 FishingState.Active = true
                 FishingState.WaitingForBite = false
                 FishingState.FishBit = false
                 
-                -- Step 0: Cleanup previous rod
+                -- Cleanup
                 UnequipRod()
                 
-                -- Step 1: Equip Rod
-                print("[FISHING] Equipping rod...")
+                -- Equip Rod
+                DebugLog("EQUIP", "Equipping rod slot 1")
                 equipRemote:FireServer(1)
                 task.wait(Config.EquipDelay)
                 
-                -- Step 2: Charge Rod
-                print("[FISHING] Charging rod...")
+                -- Charge Rod
+                DebugLog("CHARGE", "Charging rod")
                 local timestamp = workspace:GetServerTimeNow()
                 local chargeSuccess = pcall(function()
                     rodRemote:InvokeServer(timestamp)
                 end)
                 
                 if not chargeSuccess then
-                    warn("[ERROR] Failed to charge rod")
+                    DebugLog("ERROR", "Failed to charge rod")
                     ForceUnstuck()
                     Stats.Errors = Stats.Errors + 1
                     return
@@ -460,8 +474,8 @@ local function StartAutoFish()
                 
                 task.wait(Config.ChargeDelay)
                 
-                -- Step 3: Cast Rod
-                print("[FISHING] Casting rod...")
+                -- Cast Rod
+                DebugLog("CAST", "Casting rod")
                 local x, y
                 if Config.PerfectCast then
                     x = Config.PerfectCastX + (math.random(-100, 100) / 100000000)
@@ -476,7 +490,7 @@ local function StartAutoFish()
                 end)
                 
                 if not castSuccess then
-                    warn("[ERROR] Failed to cast rod")
+                    DebugLog("ERROR", "Failed to cast rod")
                     ForceUnstuck()
                     Stats.Errors = Stats.Errors + 1
                     return
@@ -484,10 +498,10 @@ local function StartAutoFish()
                 
                 task.wait(Config.CastDelay)
                 
-                print("[FISHING] Waiting for fish bite...")
+                DebugLog("WAIT", "Waiting for fish bite (max " .. CurrentRodDelay .. "s)")
                 FishingState.WaitingForBite = true
                 
-                -- Wait for fish bite with timeout
+                -- Wait for fish
                 local waitStart = tick()
                 local maxWait = CurrentRodDelay + 5
                 
@@ -495,15 +509,14 @@ local function StartAutoFish()
                     task.wait(0.1)
                 end
                 
-                -- If fish bit, wait for minigame completion
                 if FishingState.FishBit then
-                    print("[FISHING] Fish bit! Waiting for minigame...")
-                    local minigameStart = tick()
-                    while MinigameState.Active and (tick() - minigameStart) < Config.MinigameWaitTime do
+                    DebugLog("WAIT", "Fish bit! Waiting for reel completion...")
+                    local reelStart = tick()
+                    while FishingState.Reeling and (tick() - reelStart) < 5 do
                         task.wait(0.1)
                     end
                 else
-                    print("[FISHING] No bite detected (timeout)")
+                    DebugLog("WAIT", "No bite detected (timeout)")
                 end
                 
                 FishingState.Active = false
@@ -511,7 +524,7 @@ local function StartAutoFish()
             end)
             
             if not success then
-                warn("[ERROR] Fishing error:", err)
+                DebugLog("ERROR", "Fishing error: " .. tostring(err))
                 Stats.Errors = Stats.Errors + 1
                 FishingState.Active = false
                 FishingState.WaitingForBite = false
@@ -524,13 +537,15 @@ local function StartAutoFish()
         end
         
         UnequipRod()
+        DebugLog("STOP", "Auto Fish Stopped")
         
         Rayfield:Notify({
             Title = "Auto Fish Stopped",
-            Content = string.format("Caught: %d | Success: %d%%", 
+            Content = string.format("Caught: %d | Bites: %d | Success Rate: %.1f%%", 
                 Stats.FishCaught, 
-                Stats.MinigameSuccess > 0 and math.floor((Stats.MinigameSuccess / (Stats.MinigameSuccess + Stats.MinigameFail)) * 100) or 0),
-            Duration = 3,
+                Stats.BiteDetected,
+                Stats.BiteDetected > 0 and (Stats.SuccessfulCatches / Stats.BiteDetected * 100) or 0),
+            Duration = 5,
             Image = 4483362458,
         })
     end)
@@ -541,69 +556,8 @@ local function StopAutoFish()
     FishingState.Active = false
     FishingState.WaitingForBite = false
     FishingState.FishBit = false
-    MinigameState.Active = false
+    FishingState.Reeling = false
     UnequipRod()
-end
-
--------------------------------------------
------ SAFE TELEPORT
--------------------------------------------
-local function SafeTeleport(position, locationName)
-    local success = pcall(function()
-        local wasAutoFishing = Config.AutoFish
-        if wasAutoFishing then
-            StopAutoFish()
-            task.wait(0.5)
-        end
-        
-        UnequipRod()
-        task.wait(0.3)
-        
-        local char = workspace:FindFirstChild("Characters")
-        if not char then error("Characters folder not found") end
-        
-        char = char:FindFirstChild(LocalPlayer.Name)
-        if not char then error("Character not found") end
-        
-        local hrp = char:FindFirstChild("HumanoidRootPart")
-        if not hrp then error("HRP not found") end
-        
-        for _, part in pairs(char:GetDescendants()) do
-            if part:IsA("BasePart") then
-                part.CanCollide = false
-            end
-        end
-        
-        hrp.CFrame = CFrame.new(position + Vector3.new(0, 10, 0))
-        task.wait(0.5)
-        
-        for _, part in pairs(char:GetDescendants()) do
-            if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
-                part.CanCollide = true
-            end
-        end
-        
-        Rayfield:Notify({
-            Title = "Teleported",
-            Content = "Now at: " .. locationName,
-            Duration = 3,
-            Image = 4483362458,
-        })
-        
-        if wasAutoFishing then
-            task.wait(1)
-            StartAutoFish()
-        end
-    end)
-    
-    if not success then
-        Rayfield:Notify({
-            Title = "Teleport Failed",
-            Content = "Please try again",
-            Duration = 3,
-            Image = 4483362458,
-        })
-    end
 end
 
 -------------------------------------------
@@ -613,10 +567,7 @@ local function StartAutoSell()
     task.spawn(function()
         while Config.AutoSell do
             pcall(function()
-                if not _G.Replion then
-                    task.wait(5)
-                    return
-                end
+                if not _G.Replion then return end
                 
                 local DataReplion = _G.Replion.Client:WaitReplion("Data")
                 if not DataReplion then return end
@@ -665,10 +616,7 @@ local function StartAutoFavorite()
     task.spawn(function()
         while Config.AutoFavorite do
             pcall(function()
-                if not _G.Replion or not _G.ItemUtility then 
-                    task.wait(5)
-                    return 
-                end
+                if not _G.Replion or not _G.ItemUtility then return end
                 
                 local DataReplion = _G.Replion.Client:WaitReplion("Data")
                 if not DataReplion then return end
@@ -709,13 +657,13 @@ end)
 ----- CREATE UI
 -------------------------------------------
 local Window = Rayfield:CreateWindow({
-    Name = "Fish It - COMPLETE v3.0",
-    LoadingTitle = "Loading Complete Edition...",
-    LoadingSubtitle = "Full Minigame System",
+    Name = "Fish It - DEBUG v3.1",
+    LoadingTitle = "Loading Debug Edition...",
+    LoadingSubtitle = "Full Remote Scanner",
     ConfigurationSaving = {
         Enabled = true,
-        FolderName = "FishItComplete",
-        FileName = "CompleteConfig"
+        FolderName = "FishItDebug",
+        FileName = "DebugConfig"
     },
     Discord = {
         Enabled = false,
@@ -724,8 +672,8 @@ local Window = Rayfield:CreateWindow({
 })
 
 Rayfield:Notify({
-    Title = "Complete Edition Loaded",
-    Content = "Minigame system active!",
+    Title = "Debug Edition Loaded",
+    Content = "Check console (F9) for detailed logs!",
     Duration = 5,
     Image = 4483362458,
 })
@@ -734,10 +682,9 @@ Rayfield:Notify({
 ----- MAIN TAB
 -------------------------------------------
 local MainTab = Window:CreateTab("🎣 Auto Fish", 4483362458)
-local MainSection = MainTab:CreateSection("Complete Fishing System")
 
-local AutoFishToggle = MainTab:CreateToggle({
-    Name = "Auto Fish (With Minigame)",
+MainTab:CreateToggle({
+    Name = "Auto Fish (Debug Mode)",
     CurrentValue = false,
     Flag = "AutoFishToggle",
     Callback = function(Value)
@@ -749,7 +696,7 @@ local AutoFishToggle = MainTab:CreateToggle({
     end,
 })
 
-local PerfectCastToggle = MainTab:CreateToggle({
+MainTab:CreateToggle({
     Name = "Perfect Cast",
     CurrentValue = true,
     Flag = "PerfectCastToggle",
@@ -758,60 +705,50 @@ local PerfectCastToggle = MainTab:CreateToggle({
     end,
 })
 
-local MinigameSection = MainTab:CreateSection("Minigame Settings")
-
-local ClickSpeedSlider = MainTab:CreateSlider({
-    Name = "Click Speed (Lower = Faster)",
-    Range = {0.05, 0.2},
-    Increment = 0.01,
-    CurrentValue = 0.08,
-    Flag = "ClickSpeed",
+MainTab:CreateToggle({
+    Name = "Debug Logging",
+    CurrentValue = true,
+    Flag = "DebugMode",
     Callback = function(Value)
-        Config.ClickSpeed = Value
+        Config.DebugMode = Value
     end,
 })
 
-local ClickCountSlider = MainTab:CreateSlider({
-    Name = "Minigame Clicks",
-    Range = {15, 40},
+MainTab:CreateSlider({
+    Name = "Reel Speed (seconds)",
+    Range = {0.05, 0.3},
+    Increment = 0.05,
+    CurrentValue = 0.1,
+    Flag = "ReelSpeed",
+    Callback = function(Value)
+        Config.ReelSpeed = Value
+    end,
+})
+
+MainTab:CreateSlider({
+    Name = "Reel Attempts",
+    Range = {10, 50},
     Increment = 5,
-    CurrentValue = 25,
-    Flag = "ClickCount",
+    CurrentValue = 30,
+    Flag = "ReelAttempts",
     Callback = function(Value)
-        Config.MinigameClicks = Value
+        Config.ReelAttempts = Value
     end,
 })
-
-local SpeedSection = MainTab:CreateSection("General Settings")
-
-local LoopDelaySlider = MainTab:CreateSlider({
-    Name = "Loop Delay",
-    Range = {0.3, 2},
-    Increment = 0.1,
-    CurrentValue = 0.5,
-    Flag = "LoopDelay",
-    Callback = function(Value)
-        Config.LoopDelay = Value
-    end,
-})
-
-local InfoSection = MainTab:CreateSection("Session Statistics")
 
 local StatsLabel = MainTab:CreateLabel("Loading stats...")
 
 task.spawn(function()
     while task.wait(2) do
         local successRate = 0
-        if Stats.MinigameSuccess + Stats.MinigameFail > 0 then
-            successRate = math.floor((Stats.MinigameSuccess / (Stats.MinigameSuccess + Stats.MinigameFail)) * 100)
+        if Stats.BiteDetected > 0 then
+            successRate = math.floor((Stats.SuccessfulCatches / Stats.BiteDetected) * 100)
         end
         
-        StatsLabel:Set(string.format("Fish: %d | Sold: %d | Success: %d%% | Time: %s", 
-            Stats.FishCaught, Stats.TotalSold, successRate, Stats.SessionTime))
+        StatsLabel:Set(string.format("Fish: %d | Bites: %d | Success: %d%% | Reels: %d | Time: %s", 
+            Stats.FishCaught, Stats.BiteDetected, successRate, Stats.ReelAttempts, Stats.SessionTime))
     end
 end)
-
-local ManualSection = MainTab:CreateSection("Manual Controls")
 
 MainTab:CreateButton({
     Name = "Force Unstuck",
@@ -821,13 +758,16 @@ MainTab:CreateButton({
 })
 
 MainTab:CreateButton({
-    Name = "Unequip Rod",
+    Name = "Print All Remotes",
     Callback = function()
-        UnequipRod()
+        print("=== ALL AVAILABLE REMOTES ===")
+        for _, info in ipairs(AllRemotes) do
+            print(info.Type .. ": " .. info.Name .. " | Path: " .. info.Path)
+        end
         Rayfield:Notify({
-            Title = "Unequipped",
-            Content = "Rod unequipped",
-            Duration = 2,
+            Title = "Remotes Printed",
+            Content = "Check console (F9) for full list",
+            Duration = 3,
             Image = 4483362458,
         })
     end,
@@ -837,21 +777,18 @@ MainTab:CreateButton({
 ----- AUTOMATION TAB
 -------------------------------------------
 local AutoTab = Window:CreateTab("⚙️ Automation", 4483362458)
-local AutoSection = AutoTab:CreateSection("Auto Features")
 
-local AutoSellToggle = AutoTab:CreateToggle({
+AutoTab:CreateToggle({
     Name = "Auto Sell Fish",
     CurrentValue = false,
     Flag = "AutoSellToggle",
     Callback = function(Value)
         Config.AutoSell = Value
-        if Value then
-            StartAutoSell()
-        end
+        if Value then StartAutoSell() end
     end,
 })
 
-local SellThresholdSlider = AutoTab:CreateSlider({
+AutoTab:CreateSlider({
     Name = "Sell Threshold",
     Range = {20, 100},
     Increment = 5,
@@ -862,74 +799,19 @@ local SellThresholdSlider = AutoTab:CreateSlider({
     end,
 })
 
-local AutoFavToggle = AutoTab:CreateToggle({
+AutoTab:CreateToggle({
     Name = "Auto Favorite Rare Fish",
     CurrentValue = false,
     Flag = "AutoFavToggle",
     Callback = function(Value)
         Config.AutoFavorite = Value
-        if Value then
-            StartAutoFavorite()
-        end
+        if Value then StartAutoFavorite() end
     end,
 })
 
-AutoTab:CreateToggle({
-    Name = "Favorite: Secret",
-    CurrentValue = true,
-    Flag = "FavSecret",
-    Callback = function(Value)
-        Config.FavoriteTiers["Secret"] = Value
-    end,
-})
-
-AutoTab:CreateToggle({
-    Name = "Favorite: Mythic",
-    CurrentValue = true,
-    Flag = "FavMythic",
-    Callback = function(Value)
-        Config.FavoriteTiers["Mythic"] = Value
-    end,
-})
-
-AutoTab:CreateToggle({
-    Name = "Favorite: Legendary",
-    CurrentValue = true,
-    Flag = "FavLegendary",
-    Callback = function(Value)
-        Config.FavoriteTiers["Legendary"] = Value
-    end,
-})
-
--------------------------------------------
------ TELEPORT TAB
--------------------------------------------
-local TeleportTab = Window:CreateTab("📍 Teleport", 4483362458)
-
-local Islands = {
-    ["Kohana (Spawn)"] = Vector3.new(-658, 3, 719),
-    ["Tropical Grove"] = Vector3.new(-2038, 3, 3650),
-    ["Coral Reefs"] = Vector3.new(-3095, 1, 2177),
-    ["Esoteric Depths"] = Vector3.new(3157, -1303, 1439),
-    ["Kohana Volcano"] = Vector3.new(-519, 24, 189),
-    ["Winter Fest"] = Vector3.new(1611, 4, 3280),
-    ["Stingray Shores"] = Vector3.new(-32, 4, 2773),
-    ["Crater Island"] = Vector3.new(968, 1, 4854),
-}
-
-local IslandDropdown = TeleportTab:CreateDropdown({
-    Name = "Select Island",
-    Options = {"Kohana (Spawn)", "Tropical Grove", "Coral Reefs", "Esoteric Depths", 
-               "Kohana Volcano", "Winter Fest", "Stingray Shores", "Crater Island"},
-    CurrentOption = "Kohana (Spawn)",
-    Flag = "IslandSelect",
-    Callback = function(Option)
-        local pos = Islands[Option]
-        if pos then
-            SafeTeleport(pos, Option)
-        end
-    end,
-})
+AutoTab:CreateToggle({Name = "Favorite: Secret", CurrentValue = true, Callback = function(v) Config.FavoriteTiers["Secret"] = v end})
+AutoTab:CreateToggle({Name = "Favorite: Mythic", CurrentValue = true, Callback = function(v) Config.FavoriteTiers["Mythic"] = v end})
+AutoTab:CreateToggle({Name = "Favorite: Legendary", CurrentValue = true, Callback = function(v) Config.FavoriteTiers["Legendary"] = v end})
 
 -------------------------------------------
 ----- UTILITY TAB
@@ -938,9 +820,7 @@ local UtilityTab = Window:CreateTab("🔧 Utility", 4483362458)
 
 UtilityTab:CreateButton({
     Name = "Boost FPS",
-    Callback = function()
-        BoostFPS()
-    end,
+    Callback = function() BoostFPS() end,
 })
 
 UtilityTab:CreateButton({
@@ -969,9 +849,9 @@ UtilityTab:CreateButton({
         Stats.FishCaught = 0
         Stats.TotalSold = 0
         Stats.Errors = 0
-        Stats.UnstuckCount = 0
-        Stats.MinigameSuccess = 0
-        Stats.MinigameFail = 0
+        Stats.BiteDetected = 0
+        Stats.ReelAttempts = 0
+        Stats.SuccessfulCatches = 0
         Stats.StartTime = os.time()
         Rayfield:Notify({
             Title = "Stats Reset",
@@ -987,10 +867,10 @@ UtilityTab:CreateButton({
 -------------------------------------------
 local SettingsTab = Window:CreateTab("⚙️ Settings", 4483362458)
 
-SettingsTab:CreateLabel("Version: 3.0 Complete Edition")
-SettingsTab:CreateLabel("Status: Full Minigame System")
-SettingsTab:CreateLabel("Mechanics: Click + Finish")
-SettingsTab:CreateLabel("UI: Rayfield")
+SettingsTab:CreateLabel("Version: 3.1 Debug Edition")
+SettingsTab:CreateLabel("Status: Auto-Detect Remotes")
+SettingsTab:CreateLabel("Debug: Press F9 for console")
+SettingsTab:CreateLabel("Total Remotes: " .. #AllRemotes)
 
 SettingsTab:CreateButton({
     Name = "Destroy GUI",
@@ -1005,9 +885,14 @@ SettingsTab:CreateButton({
 ----- INITIALIZATION
 -------------------------------------------
 GetCurrentRod()
+DebugLog("INIT", "Script initialized successfully")
+DebugLog("INIT", "Rod: " .. CurrentRod .. " | Delay: " .. CurrentRodDelay .. "s")
+DebugLog("INIT", "Total remotes found: " .. #AllRemotes)
+DebugLog("INIT", "Press F9 to see debug console")
+
 print("=================================")
-print("Fish It Complete v3.0 Loaded")
+print("Fish It Debug v3.1 Loaded")
 print("Rod: " .. CurrentRod)
-print("Minigame System: ACTIVE")
-print("Fast Click: " .. Config.MinigameClicks .. " clicks")
+print("Total Remotes: " .. #AllRemotes)
+print("Debug Mode: ACTIVE")
 print("=================================")
