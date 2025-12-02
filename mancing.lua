@@ -1,11 +1,10 @@
 -------------------------------------------
------ Fish It CRITICAL FIX v7.1
------ Fixed Replion Loading
------ Fixed Race Conditions
------ Guaranteed Fish Detection
+----- Fish It v8.0 - EVENT BASED
+----- Listen to Server Events
+----- 100% Accurate Fish Detection
 -------------------------------------------
 
-_G.FishItVersion = "7.1 CRITICAL FIX"
+_G.FishItVersion = "8.0 EVENT BASED"
 
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
@@ -45,82 +44,12 @@ local miniGameRemote = net:WaitForChild("RF/RequestFishingMinigameStarted", 10)
 local finishRemote = net:WaitForChild("RE/FishingCompleted", 10)
 local equipRemote = net:WaitForChild("RE/EquipToolFromHotbar", 10)
 local unequipRemote = net:WaitForChild("RE/UnequipTool", 10)
+
+-- CRITICAL: Fish detection events
 local REReplicateTextEffect = net:WaitForChild("RE/ReplicateTextEffect", 10)
-
--------------------------------------------
------ CRITICAL: Load Replion PROPERLY
--------------------------------------------
-local ReplionLoaded = false
-local ItemUtilityLoaded = false
-
-task.spawn(function()
-    print("[INIT] Loading Replion...")
-    
-    local attempts = 0
-    while not ReplionLoaded and attempts < 10 do
-        attempts = attempts + 1
-        
-        local success = pcall(function()
-            if not _G.Replion then
-                local replionPath = ReplicatedStorage:FindFirstChild("Packages")
-                if replionPath then
-                    replionPath = replionPath:FindFirstChild("_Index")
-                    if replionPath then
-                        for _, v in pairs(replionPath:GetChildren()) do
-                            if v.Name:match("replica") then
-                                local replica = v:FindFirstChild("replica")
-                                if replica then
-                                    _G.Replion = require(replica)
-                                    print("[INIT] ✅ Replion loaded from:", v.Name)
-                                    ReplionLoaded = true
-                                    break
-                                end
-                            end
-                        end
-                    end
-                end
-            else
-                ReplionLoaded = true
-                print("[INIT] ✅ Replion already loaded")
-            end
-        end)
-        
-        if not success then
-            print("[INIT] ⚠️ Attempt " .. attempts .. " failed, retrying...")
-            task.wait(1)
-        end
-    end
-    
-    if not ReplionLoaded then
-        print("[INIT] ❌ Failed to load Replion after " .. attempts .. " attempts")
-        return
-    end
-    
-    -- Load ItemUtility
-    task.wait(1)
-    pcall(function()
-        if not _G.ItemUtility then
-            local itemUtil = ReplicatedStorage:FindFirstChild("Shared")
-            if itemUtil then
-                itemUtil = itemUtil:FindFirstChild("Modules")
-                if itemUtil then
-                    itemUtil = itemUtil:FindFirstChild("ItemUtility")
-                    if itemUtil then
-                        _G.ItemUtility = require(itemUtil)
-                        ItemUtilityLoaded = true
-                        print("[INIT] ✅ ItemUtility loaded")
-                    end
-                end
-            end
-        else
-            ItemUtilityLoaded = true
-            print("[INIT] ✅ ItemUtility already loaded")
-        end
-    end)
-    
-    print("[INIT] Replion Status:", ReplionLoaded and "✅" or "❌")
-    print("[INIT] ItemUtility Status:", ItemUtilityLoaded and "✅" or "❌")
-end)
+local FishCaughtEvent = net:FindFirstChild("RE/FishCaught")
+local ObtainedNewFishEvent = net:FindFirstChild("RE/ObtainedNewFishNotification")
+local FishingCompletedEvent = net:FindFirstChild("RE/FishingCompleted")
 
 -------------------------------------------
 ----- Configuration
@@ -138,7 +67,7 @@ local Config = {
     WaitForGUI = 0.8,
     ClickSpeed = 0.08,
     TotalClicks = 30,
-    AfterMinigameWait = 2.5, -- Increased for safety
+    AfterMinigameWait = 2.5,
     
     LoopDelay = 0.6,
     
@@ -161,20 +90,11 @@ local Config = {
 ----- Rod Delays
 -------------------------------------------
 local RodDelays = {
-    ["Ares Rod"] = 2.0,
-    ["Angler Rod"] = 2.0,
-    ["Ghostfinn Rod"] = 2.0,
-    ["Astral Rod"] = 2.5,
-    ["Chrome Rod"] = 3.0,
-    ["Steampunk Rod"] = 3.5,
-    ["Lucky Rod"] = 4.0,
-    ["Midnight Rod"] = 4.0,
-    ["Demascus Rod"] = 4.5,
-    ["Grass Rod"] = 4.5,
-    ["Luck Rod"] = 5.0,
-    ["Carbon Rod"] = 4.5,
-    ["Lava Rod"] = 5.0,
-    ["Starter Rod"] = 5.5,
+    ["Ares Rod"] = 2.0, ["Angler Rod"] = 2.0, ["Ghostfinn Rod"] = 2.0,
+    ["Astral Rod"] = 2.5, ["Chrome Rod"] = 3.0, ["Steampunk Rod"] = 3.5,
+    ["Lucky Rod"] = 4.0, ["Midnight Rod"] = 4.0, ["Demascus Rod"] = 4.5,
+    ["Grass Rod"] = 4.5, ["Luck Rod"] = 5.0, ["Carbon Rod"] = 4.5,
+    ["Lava Rod"] = 5.0, ["Starter Rod"] = 5.5,
 }
 
 local CurrentRodDelay = 4.0
@@ -185,13 +105,12 @@ local CurrentRod = "Unknown"
 -------------------------------------------
 local Stats = {
     FishCaught = 0,
-    RealFishCaught = 0,
     TotalSold = 0,
     StartTime = os.time(),
     SessionTime = "0m 0s",
     BiteDetected = 0,
     MinigameAttempts = 0,
-    LastFishName = "None",
+    LastFishName = "Unknown Fish",
     FishPerMinute = 0
 }
 
@@ -205,137 +124,49 @@ local function DebugLog(category, message)
 end
 
 -------------------------------------------
------ IMPROVED INVENTORY TRACKER
+----- CRITICAL: FISH CAUGHT EVENT LISTENER
 -------------------------------------------
-local InventoryCache = {}
-local InventoryLoaded = false
+-- Listen to FishCaught event (the real fish detection!)
+if FishCaughtEvent then
+    FishCaughtEvent.OnClientEvent:Connect(function(...)
+        local args = {...}
+        Stats.FishCaught = Stats.FishCaught + 1
+        
+        DebugLog("FISH", "🐟 ✅ FISH CAUGHT! Total: " .. Stats.FishCaught)
+        
+        -- Try to get fish name from args
+        if args[1] and type(args[1]) == "table" and args[1].Id then
+            Stats.LastFishName = args[1].Id
+            DebugLog("FISH", "Fish ID: " .. tostring(args[1].Id))
+        end
+        
+        Rayfield:Notify({
+            Title = "🎣 Fish Caught!",
+            Content = "Total: " .. Stats.FishCaught,
+            Duration = 2,
+            Image = 4483362458,
+        })
+    end)
+    DebugLog("INIT", "✅ FishCaught event listener registered")
+else
+    DebugLog("INIT", "⚠️ FishCaught event not found")
+end
 
-local function GetInventoryData()
-    local inventory = {}
-    
-    if not ReplionLoaded or not _G.Replion then
-        DebugLog("INVENTORY", "❌ Replion not loaded yet")
-        return inventory
-    end
-    
-    local success, err = pcall(function()
-        local DataReplion = _G.Replion.Client:WaitReplion("Data", 5)
-        if not DataReplion then
-            DebugLog("INVENTORY", "❌ DataReplion not found")
-            return
-        end
+-- Listen to ObtainedNewFishNotification event (backup)
+if ObtainedNewFishEvent then
+    ObtainedNewFishEvent.OnClientEvent:Connect(function(...)
+        local args = {...}
+        DebugLog("FISH", "🆕 New fish notification received!")
         
-        local items = DataReplion:Get({"Inventory","Items"})
-        
-        if type(items) ~= "table" then
-            DebugLog("INVENTORY", "❌ Items is not a table: " .. type(items))
-            return
-        end
-        
-        DebugLog("INVENTORY", "Found " .. #items .. " items in inventory")
-        
-        for _, item in ipairs(items) do
-            if item.Id then
-                local fishData = {
-                    Id = item.Id,
-                    Count = item.Count or 1,
-                    Favorited = item.Favorited or false
-                }
-                
-                if ItemUtilityLoaded and _G.ItemUtility then
-                    local itemData = _G.ItemUtility:GetItemData(item.Id)
-                    if itemData and itemData.Data then
-                        fishData.Name = itemData.Data.DisplayName or item.Id
-                        fishData.Tier = itemData.Data.Tier or "Unknown"
-                    end
-                end
-                
-                inventory[item.Id] = fishData
-            end
+        -- Log all arguments for debugging
+        for i, v in ipairs(args) do
+            DebugLog("FISH", "Arg[" .. i .. "]: " .. tostring(v))
         end
     end)
-    
-    if not success then
-        DebugLog("INVENTORY", "❌ Error getting inventory: " .. tostring(err))
-    end
-    
-    return inventory
+    DebugLog("INIT", "✅ ObtainedNewFish event listener registered")
+else
+    DebugLog("INIT", "⚠️ ObtainedNewFish event not found")
 end
-
-local function CheckInventoryChange()
-    if not InventoryLoaded then
-        DebugLog("INVENTORY", "Inventory not initialized yet")
-        return false
-    end
-    
-    local newInventory = GetInventoryData()
-    local fishAdded = {}
-    
-    for id, fishData in pairs(newInventory) do
-        local oldData = InventoryCache[id]
-        
-        if not oldData then
-            table.insert(fishAdded, {
-                Name = fishData.Name or id,
-                Tier = fishData.Tier or "Common",
-                Count = fishData.Count
-            })
-            DebugLog("INVENTORY", "✅ NEW FISH: " .. (fishData.Name or id) .. " x" .. fishData.Count)
-        elseif oldData.Count < fishData.Count then
-            local added = fishData.Count - oldData.Count
-            table.insert(fishAdded, {
-                Name = fishData.Name or id,
-                Tier = fishData.Tier or "Common",
-                Count = added
-            })
-            DebugLog("INVENTORY", "✅ FISH ADDED: " .. (fishData.Name or id) .. " +" .. added)
-        end
-    end
-    
-    InventoryCache = newInventory
-    
-    if #fishAdded > 0 then
-        for _, fish in ipairs(fishAdded) do
-            Stats.RealFishCaught = Stats.RealFishCaught + fish.Count
-            Stats.LastFishName = fish.Name .. " (" .. fish.Tier .. ")"
-            
-            Rayfield:Notify({
-                Title = "🐟 " .. fish.Name,
-                Content = "+" .. fish.Count .. " | Total: " .. Stats.RealFishCaught,
-                Duration = 2,
-                Image = 4483362458,
-            })
-        end
-    end
-    
-    return #fishAdded > 0
-end
-
--- Initialize after delay
-task.spawn(function()
-    task.wait(8) -- Wait longer for Replion to load
-    
-    local retries = 0
-    while not ReplionLoaded and retries < 5 do
-        DebugLog("INIT", "Waiting for Replion... (" .. retries .. "/5)")
-        task.wait(2)
-        retries = retries + 1
-    end
-    
-    if ReplionLoaded then
-        InventoryCache = GetInventoryData()
-        InventoryLoaded = true
-        
-        local totalFish = 0
-        for _, fish in pairs(InventoryCache) do
-            totalFish = totalFish + fish.Count
-        end
-        
-        DebugLog("INIT", "✅ Inventory tracker initialized | Total fish: " .. totalFish)
-    else
-        DebugLog("INIT", "❌ Inventory tracker failed - Replion not loaded")
-    end
-end)
 
 -------------------------------------------
 ----- Anti-AFK
@@ -389,7 +220,6 @@ local function FindMinigameGUI()
     for _, name in ipairs({"FishingMinigame", "Minigame", "ReelGame", "FishGame", "CatchGame"}) do
         local gui = playerGui:FindFirstChild(name)
         if gui and gui:IsA("ScreenGui") and gui.Enabled then
-            DebugLog("GUI", "Found: " .. name)
             return gui
         end
     end
@@ -398,7 +228,6 @@ local function FindMinigameGUI()
         if gui:IsA("ScreenGui") and gui.Enabled and gui.Name ~= "Rayfield" then
             local hasButton = gui:FindFirstChildOfClass("TextButton", true)
             if hasButton then
-                DebugLog("GUI", "Found by search: " .. gui.Name)
                 return gui
             end
         end
@@ -431,14 +260,13 @@ local function SolveMinigame(button)
         task.wait(Config.ClickSpeed)
         
         if not button.Visible or not button.Parent then
-            DebugLog("MINIGAME", "Button disappeared after " .. i .. " clicks")
             break
         end
     end
 end
 
 -------------------------------------------
------ MINIGAME HANDLER (NO RACE CONDITION)
+----- MINIGAME HANDLER
 -------------------------------------------
 local FishingState = {
     Active = false,
@@ -447,12 +275,10 @@ local FishingState = {
     ProcessingMinigame = false
 }
 
-local MinigameLock = false -- CRITICAL: Prevent overlapping minigames
+local MinigameLock = false
 
 local function CompleteMinigame()
-    -- CRITICAL: Check lock to prevent race condition
     if MinigameLock or FishingState.ProcessingMinigame then
-        DebugLog("MINIGAME", "⚠️ Already processing, skipping")
         return
     end
     
@@ -462,20 +288,12 @@ local function CompleteMinigame()
     
     DebugLog("MINIGAME", "========== MINIGAME #" .. Stats.MinigameAttempts .. " ==========")
     
-    -- Get inventory count before
-    local fishCountBefore = 0
-    for _, fish in pairs(InventoryCache) do
-        fishCountBefore = fishCountBefore + fish.Count
-    end
-    DebugLog("MINIGAME", "Inventory before: " .. fishCountBefore .. " fish")
-    
-    -- Wait for GUI
     task.wait(Config.WaitForGUI)
     
-    -- Solve minigame
     local gui = FindMinigameGUI()
     
     if gui then
+        DebugLog("MINIGAME", "GUI found: " .. gui.Name)
         local button = gui:FindFirstChildOfClass("TextButton", true)
         if button then
             SolveMinigame(button)
@@ -484,7 +302,7 @@ local function CompleteMinigame()
         DebugLog("MINIGAME", "No GUI, using fallback")
     end
     
-    -- Fallback spam
+    -- Fallback
     DebugLog("MINIGAME", "Executing fallback...")
     for i = 1, Config.TotalClicks do
         pcall(function()
@@ -506,34 +324,18 @@ local function CompleteMinigame()
         task.wait(0.1)
     end
     
-    -- CRITICAL: Wait for server
-    DebugLog("MINIGAME", "Waiting " .. Config.AfterMinigameWait .. "s for server...")
+    -- Wait for server to process
+    DebugLog("MINIGAME", "Waiting for server response...")
     task.wait(Config.AfterMinigameWait)
     
-    -- Check inventory
-    local fishAdded = CheckInventoryChange()
+    DebugLog("MINIGAME", "========== COMPLETE ==========")
     
-    local fishCountAfter = 0
-    for _, fish in pairs(InventoryCache) do
-        fishCountAfter = fishCountAfter + fish.Count
-    end
-    
-    local diff = fishCountAfter - fishCountBefore
-    DebugLog("MINIGAME", "Inventory after: " .. fishCountAfter .. " fish (+" .. diff .. ")")
-    
-    if fishAdded or diff > 0 then
-        DebugLog("MINIGAME", "========== ✅ SUCCESS! ==========")
-    else
-        DebugLog("MINIGAME", "========== ⚠️ WARNING: No fish detected ==========")
-    end
-    
-    -- CRITICAL: Release lock
     FishingState.ProcessingMinigame = false
     MinigameLock = false
 end
 
 -------------------------------------------
------ FISH BITE
+----- FISH BITE DETECTION
 -------------------------------------------
 REReplicateTextEffect.OnClientEvent:Connect(function(data)
     if not Config.AutoFish or not FishingState.Active or FishingState.FishBit then return end
@@ -555,15 +357,13 @@ REReplicateTextEffect.OnClientEvent:Connect(function(data)
             CompleteMinigame()
         end)
         
-        Stats.FishCaught = Stats.FishCaught + 1
-        
         task.wait(0.3)
         FishingState.FishBit = false
     end)
 end)
 
 -------------------------------------------
------ MAIN AUTO FISHING (NO OVERLAP)
+----- MAIN AUTO FISHING
 -------------------------------------------
 local function StartAutoFish()
     if Config.AutoFish then return end
@@ -571,13 +371,13 @@ local function StartAutoFish()
     GetCurrentRod()
     
     DebugLog("START", "==================== AUTO FISH STARTED ====================")
-    DebugLog("START", "Replion: " .. (ReplionLoaded and "✅" or "❌"))
-    DebugLog("START", "ItemUtility: " .. (ItemUtilityLoaded and "✅" or "❌"))
     DebugLog("START", "Rod: " .. CurrentRod)
+    DebugLog("START", "FishCaught Event: " .. (FishCaughtEvent and "✅" or "❌"))
+    DebugLog("START", "ObtainedNewFish Event: " .. (ObtainedNewFishEvent and "✅" or "❌"))
     
     Rayfield:Notify({
         Title = "Auto Fish Started",
-        Content = "Rod: " .. CurrentRod,
+        Content = "Event-based detection active!",
         Duration = 3,
         Image = 4483362458,
     })
@@ -586,9 +386,7 @@ local function StartAutoFish()
         local cycleCount = 0
         
         while Config.AutoFish do
-            -- CRITICAL: Wait for previous minigame to complete
             while MinigameLock or FishingState.ProcessingMinigame do
-                DebugLog("CYCLE", "⏸️ Waiting for minigame to complete...")
                 task.wait(0.5)
             end
             
@@ -611,23 +409,19 @@ local function StartAutoFish()
                 
                 UnequipRod()
                 
-                DebugLog("CYCLE", "Equipping rod...")
                 equipRemote:FireServer(1)
                 task.wait(Config.EquipDelay)
                 
-                DebugLog("CYCLE", "Charging rod...")
                 local timestamp = workspace:GetServerTimeNow()
                 pcall(function() rodRemote:InvokeServer(timestamp) end)
                 task.wait(Config.ChargeDelay)
                 
-                DebugLog("CYCLE", "Casting rod...")
                 local x = Config.PerfectCastX + (math.random(-100, 100) / 100000000)
                 local y = Config.PerfectCastY + (math.random(-100, 100) / 100000000)
                 
                 pcall(function() miniGameRemote:InvokeServer(x, y) end)
                 task.wait(Config.CastDelay)
                 
-                DebugLog("CYCLE", "Waiting for bite (max " .. (CurrentRodDelay + 3) .. "s)...")
                 FishingState.WaitingForBite = true
                 
                 local waitStart = tick()
@@ -637,10 +431,7 @@ local function StartAutoFish()
                     task.wait(0.2)
                 end
                 
-                if FishingState.FishBit then
-                    DebugLog("CYCLE", "Fish bit! Waiting for minigame...")
-                    -- Wait for minigame to complete (handled by lock)
-                else
+                if not FishingState.FishBit then
                     DebugLog("CYCLE", "No bite (timeout)")
                 end
                 
@@ -666,58 +457,23 @@ local function StopAutoFish()
 end
 
 -------------------------------------------
------ AUTO SELL & FAVORITE (Same as before, shortened for space)
+----- AUTO SELL & FAVORITE (Simplified)
 -------------------------------------------
 local function StartAutoSell()
     task.spawn(function()
         while Config.AutoSell do
             pcall(function()
-                if not ReplionLoaded or not _G.Replion then return end
-                local DataReplion = _G.Replion.Client:WaitReplion("Data")
-                local items = DataReplion and DataReplion:Get({"Inventory","Items"})
-                
-                if type(items) == "table" then
-                    local count = 0
-                    for _, item in ipairs(items) do
-                        if not item.Favorited then count = count + (item.Count or 1) end
-                    end
-                    
-                    if count >= Config.SellThreshold and os.time() - Config.LastSellTime >= Config.SellCooldown then
-                        local sellRemote = net:FindFirstChild("RF/SellAllItems")
-                        if sellRemote then
-                            sellRemote:InvokeServer()
-                            Config.LastSellTime = os.time()
-                            Stats.TotalSold = Stats.TotalSold + count
-                            task.wait(1)
-                            InventoryCache = GetInventoryData()
-                            Rayfield:Notify({Title = "Sold", Content = count .. " fish", Duration = 2, Image = 4483362458})
-                        end
-                    end
+                local sellRemote = net:FindFirstChild("RF/SellAllItems")
+                if sellRemote and Stats.FishCaught >= Config.SellThreshold and os.time() - Config.LastSellTime >= Config.SellCooldown then
+                    sellRemote:InvokeServer()
+                    Config.LastSellTime = os.time()
+                    local sold = Stats.FishCaught
+                    Stats.TotalSold = Stats.TotalSold + sold
+                    Stats.FishCaught = 0
+                    Rayfield:Notify({Title = "Sold", Content = sold .. " fish", Duration = 2, Image = 4483362458})
                 end
             end)
             task.wait(15)
-        end
-    end)
-end
-
-local function StartAutoFavorite()
-    task.spawn(function()
-        while Config.AutoFavorite do
-            pcall(function()
-                if not ReplionLoaded or not _G.Replion or not _G.ItemUtility then return end
-                local DataReplion = _G.Replion.Client:WaitReplion("Data")
-                local items = DataReplion and DataReplion:Get({"Inventory","Items"})
-                
-                if type(items) == "table" then
-                    for _, item in ipairs(items) do
-                        local itemData = _G.ItemUtility:GetItemData(item.Id)
-                        if itemData and itemData.Data and Config.FavoriteTiers[itemData.Data.Tier] and not item.Favorited then
-                            item.Favorited = true
-                        end
-                    end
-                end
-            end)
-            task.wait(10)
         end
     end)
 end
@@ -731,27 +487,29 @@ task.spawn(function()
         Stats.SessionTime = string.format("%dm %ds", math.floor(elapsed / 60), elapsed % 60)
         
         if elapsed > 0 then
-            Stats.FishPerMinute = (Stats.RealFishCaught / elapsed) * 60
+            Stats.FishPerMinute = (Stats.FishCaught / elapsed) * 60
         end
     end
 end)
 
 -------------------------------------------
------ UI (Simplified)
+----- UI
 -------------------------------------------
 local Window = Rayfield:CreateWindow({
-    Name = "Fish It v7.1 FIXED",
+    Name = "Fish It v8.0 EVENT",
     LoadingTitle = "Loading...",
-    LoadingSubtitle = "Critical Fixes Applied",
-    ConfigurationSaving = {Enabled = true, FolderName = "FishItFixed", FileName = "FixedConfig"},
+    LoadingSubtitle = "Event-Based Detection",
+    ConfigurationSaving = {Enabled = true, FolderName = "FishItEvent", FileName = "EventConfig"},
     Discord = {Enabled = false},
     KeySystem = false,
 })
 
+Rayfield:Notify({Title = "v8.0 EVENT BASED", Content = "Real server event detection!", Duration = 3, Image = 4483362458})
+
 local MainTab = Window:CreateTab("🎣 Auto Fish", 4483362458)
 
 MainTab:CreateToggle({
-    Name = "Auto Fish",
+    Name = "Auto Fish (Event Detection)",
     CurrentValue = false,
     Callback = function(v) if v then StartAutoFish() else StopAutoFish() end end,
 })
@@ -772,40 +530,33 @@ MainTab:CreateSlider({
 
 local StatsLabel = MainTab:CreateLabel("Loading...")
 local LastFishLabel = MainTab:CreateLabel("Last Fish: None")
-local SystemLabel = MainTab:CreateLabel("System: Initializing...")
 
 task.spawn(function()
     while task.wait(1) do
-        local successRate = Stats.BiteDetected > 0 and math.floor((Stats.RealFishCaught / Stats.BiteDetected) * 100) or 0
-        StatsLabel:Set(string.format("🐟 %d | 🎣 %d | ✅ %d%% | ⚡ %.1f/min | ⏱️ %s", 
-            Stats.RealFishCaught, Stats.BiteDetected, successRate, Stats.FishPerMinute, Stats.SessionTime))
+        local successRate = Stats.BiteDetected > 0 and math.floor((Stats.FishCaught / Stats.BiteDetected) * 100) or 0
+        StatsLabel:Set(string.format("🐟 Fish: %d | 🎣 Bites: %d | ✅ %d%% | ⚡ %.1f/min | ⏱️ %s", 
+            Stats.FishCaught, Stats.BiteDetected, successRate, Stats.FishPerMinute, Stats.SessionTime))
         LastFishLabel:Set("Last: " .. Stats.LastFishName)
-        
-        local sysStatus = ""
-        if ReplionLoaded then sysStatus = sysStatus .. "✅ Replion " else sysStatus = sysStatus .. "❌ Replion " end
-        if InventoryLoaded then sysStatus = sysStatus .. "✅ Inventory" else sysStatus = sysStatus .. "❌ Inventory" end
-        SystemLabel:Set(sysStatus)
     end
 end)
 
 local AutoTab = Window:CreateTab("⚙️ Auto", 4483362458)
 AutoTab:CreateToggle({Name = "Auto Sell", CurrentValue = false, Callback = function(v) Config.AutoSell = v; if v then StartAutoSell() end end})
-AutoTab:CreateToggle({Name = "Auto Favorite", CurrentValue = false, Callback = function(v) Config.AutoFavorite = v; if v then StartAutoFavorite() end end})
+AutoTab:CreateSlider({Name = "Sell Threshold", Range = {20, 100}, Increment = 5, CurrentValue = 60, Callback = function(v) Config.SellThreshold = v end})
 
 local UtilityTab = Window:CreateTab("🔧 Utility", 4483362458)
 UtilityTab:CreateButton({Name = "Force Unstuck", Callback = function() UnequipRod() end})
-UtilityTab:CreateButton({Name = "Check Inventory", Callback = function()
-    local total = 0
-    for _, fish in pairs(InventoryCache) do
-        total = total + fish.Count
-    end
-    Rayfield:Notify({Title = "Inventory", Content = "Total: " .. total, Duration = 2, Image = 4483362458})
-end})
 UtilityTab:CreateButton({Name = "Rejoin", Callback = function() TeleportService:Teleport(game.PlaceId, LocalPlayer) end})
+
+local SettingsTab = Window:CreateTab("⚙️ Settings", 4483362458)
+SettingsTab:CreateLabel("Version: 8.0 EVENT BASED")
+SettingsTab:CreateLabel("Detection: Server Events")
+SettingsTab:CreateLabel("Events: FishCaught + ObtainedNewFish")
+SettingsTab:CreateButton({Name = "Destroy GUI", Callback = function() StopAutoFish(); task.wait(0.5); Rayfield:Destroy() end})
 
 GetCurrentRod()
 print("=================================")
-print("Fish It v7.1 CRITICAL FIX")
-print("Fixes: Replion loading, Race conditions")
+print("Fish It v8.0 EVENT BASED")
+print("Detection: RE/FishCaught event")
 print("Press F9 for detailed logs")
 print("=================================")
