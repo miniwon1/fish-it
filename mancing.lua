@@ -1,10 +1,10 @@
 -------------------------------------------
------ Fish It v8.2 - RELIABLE TRACKING
------ Track by Minigame Completion
------ Simple & Works!
+----- Fish It v8.3 - KEYBOARD ONLY
+----- Virtual Key Press (No Mouse)
+----- Space + E Spam
 -------------------------------------------
 
-_G.FishItVersion = "8.2 RELIABLE"
+_G.FishItVersion = "8.3 KEYBOARD"
 
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
@@ -16,6 +16,7 @@ local Players = game:GetService("Players")
 local TeleportService = game:GetService("TeleportService")
 local LocalPlayer = Players.LocalPlayer
 local VirtualUser = game:GetService("VirtualUser")
+local VirtualInputManager = game:GetService("VirtualInputManager")
 
 -------------------------------------------
 ----- Character
@@ -52,15 +53,15 @@ local REReplicateTextEffect = net:WaitForChild("RE/ReplicateTextEffect", 10)
 local Config = {
     AutoFish = false,
     AutoSell = false,
-    DebugMode = false, -- Set false untuk less spam
+    DebugMode = false,
     
     EquipDelay = 0.4,
     ChargeDelay = 0.5,
     CastDelay = 0.4,
     
-    WaitForGUI = 0.8,
-    ClickSpeed = 0.08,
-    TotalClicks = 30,
+    WaitForGUI = 0.6,
+    KeyPressDelay = 0.06, -- Keyboard spam speed
+    TotalKeyPresses = 40, -- More presses since keyboard is faster
     AfterMinigameWait = 2.5,
     
     LoopDelay = 0.6,
@@ -92,7 +93,7 @@ local CurrentRod = "Unknown"
 ----- Statistics
 -------------------------------------------
 local Stats = {
-    FishCaught = 0, -- Based on successful minigame completions
+    FishCaught = 0,
     TotalSold = 0,
     StartTime = os.time(),
     SessionTime = "0m 0s",
@@ -153,55 +154,39 @@ local function UnequipRod()
 end
 
 -------------------------------------------
------ MINIGAME
+----- KEYBOARD-ONLY MINIGAME SOLVER
 -------------------------------------------
-local function FindMinigameGUI()
-    local playerGui = LocalPlayer:WaitForChild("PlayerGui")
+local function SolveMinigameKeyboard()
+    DebugLog("MINIGAME", "⌨️ Keyboard solver started")
     
-    for _, name in ipairs({"FishingMinigame", "Minigame", "ReelGame", "FishGame", "CatchGame"}) do
-        local gui = playerGui:FindFirstChild(name)
-        if gui and gui:IsA("ScreenGui") and gui.Enabled then
-            return gui
-        end
-    end
+    -- Try multiple key combinations
+    local keys = {
+        Enum.KeyCode.Space,
+        Enum.KeyCode.E,
+        Enum.KeyCode.Return,
+    }
     
-    for _, gui in pairs(playerGui:GetChildren()) do
-        if gui:IsA("ScreenGui") and gui.Enabled and gui.Name ~= "Rayfield" then
-            local hasButton = gui:FindFirstChildOfClass("TextButton", true)
-            if hasButton then
-                return gui
-            end
-        end
-    end
-    
-    return nil
-end
-
-local function SolveMinigame(button)
-    for i = 1, Config.TotalClicks do
+    for i = 1, Config.TotalKeyPresses do
         pcall(function()
-            for _, conn in pairs(getconnections(button.MouseButton1Click)) do
-                conn:Fire()
-            end
-            for _, conn in pairs(getconnections(button.MouseButton1Down)) do
-                conn:Fire()
+            -- Method 1: VirtualInputManager (Most reliable)
+            for _, keyCode in ipairs(keys) do
+                VirtualInputManager:SendKeyEvent(true, keyCode, false, game)
+                task.wait(0.005)
+                VirtualInputManager:SendKeyEvent(false, keyCode, false, game)
             end
             
-            local pos = button.AbsolutePosition
-            local size = button.AbsoluteSize
-            local center = Vector2.new(pos.X + size.X/2, pos.Y + size.Y/2)
-            VirtualUser:Button1Down(center)
-            task.wait(0.005)
-            VirtualUser:Button1Up(center)
+            -- Method 2: VirtualUser TypeKey
             VirtualUser:TypeKey(" ")
+            VirtualUser:TypeKey("e")
+            
+            -- Method 3: Fire remote directly
+            finishRemote:FireServer()
         end)
         
-        task.wait(Config.ClickSpeed)
-        
-        if not button.Visible or not button.Parent then
-            break
-        end
+        task.wait(Config.KeyPressDelay)
     end
+    
+    DebugLog("MINIGAME", "⌨️ Keyboard solver finished")
 end
 
 -------------------------------------------
@@ -227,28 +212,10 @@ local function CompleteMinigame()
     
     task.wait(Config.WaitForGUI)
     
-    local gui = FindMinigameGUI()
+    -- KEYBOARD-ONLY SOLVING (No mouse!)
+    SolveMinigameKeyboard()
     
-    if gui then
-        local button = gui:FindFirstChildOfClass("TextButton", true)
-        if button then
-            SolveMinigame(button)
-        end
-    end
-    
-    -- Fallback
-    for i = 1, Config.TotalClicks do
-        pcall(function()
-            finishRemote:FireServer()
-            VirtualUser:Button1Down(Vector2.new(0,0))
-            task.wait(0.01)
-            VirtualUser:Button1Up(Vector2.new(0,0))
-            VirtualUser:TypeKey(" ")
-        end)
-        task.wait(Config.ClickSpeed)
-    end
-    
-    -- Finish signals
+    -- Extra finish signals
     for i = 1, 5 do
         pcall(function()
             finishRemote:FireServer()
@@ -256,19 +223,17 @@ local function CompleteMinigame()
         task.wait(0.1)
     end
     
-    -- Wait for server
+    -- Wait for server response
     task.wait(Config.AfterMinigameWait)
     
-    -- CRITICAL: Count fish after minigame complete
-    -- If we reached here, minigame was successful, so fish must have been caught
+    -- Count fish
     Stats.FishCaught = Stats.FishCaught + 1
     
     DebugLog("MINIGAME", "========== COMPLETE | Fish #" .. Stats.FishCaught .. " ==========")
     
-    -- Notification
     Rayfield:Notify({
-        Title = "🎣 Fish Caught!",
-        Content = "Total: " .. Stats.FishCaught,
+        Title = "🎣 Fish #" .. Stats.FishCaught,
+        Content = "⌨️ Keyboard solved!",
         Duration = 1.5,
         Image = 4483362458,
     })
@@ -315,12 +280,12 @@ local function StartAutoFish()
     
     print("==================== AUTO FISH STARTED ====================")
     print("Rod: " .. CurrentRod)
-    print("Tracking: Minigame Completion")
+    print("Method: Keyboard-Only (No Mouse)")
     print("===========================================================")
     
     Rayfield:Notify({
         Title = "Auto Fish Started",
-        Content = "Rod: " .. CurrentRod,
+        Content = "⌨️ Keyboard mode!",
         Duration = 3,
         Image = 4483362458,
     })
@@ -409,9 +374,7 @@ local function StartAutoSell()
                     local sold = Stats.FishCaught
                     Stats.TotalSold = Stats.TotalSold + sold
                     
-                    Rayfield:Notify({Title = "💰 Sold!", Content = sold .. " fish sold", Duration = 2, Image = 4483362458})
-                    
-                    -- Don't reset FishCaught, keep counting
+                    Rayfield:Notify({Title = "💰 Sold!", Content = sold .. " fish", Duration = 2, Image = 4483362458})
                 end
             end)
             task.wait(15)
@@ -437,28 +400,44 @@ end)
 ----- UI
 -------------------------------------------
 local Window = Rayfield:CreateWindow({
-    Name = "Fish It v8.2 RELIABLE",
+    Name = "Fish It v8.3 KEYBOARD",
     LoadingTitle = "Loading...",
-    LoadingSubtitle = "Reliable Tracking",
-    ConfigurationSaving = {Enabled = true, FolderName = "FishItReliable", FileName = "ReliableConfig"},
+    LoadingSubtitle = "Keyboard-Only Mode",
+    ConfigurationSaving = {Enabled = true, FolderName = "FishItKeyboard", FileName = "KeyboardConfig"},
     Discord = {Enabled = false},
     KeySystem = false,
 })
 
-Rayfield:Notify({Title = "v8.2 RELIABLE", Content = "Simple & works!", Duration = 3, Image = 4483362458})
+Rayfield:Notify({Title = "v8.3 KEYBOARD", Content = "⌨️ No mouse clicks!", Duration = 3, Image = 4483362458})
 
 local MainTab = Window:CreateTab("🎣 Auto Fish", 4483362458)
 
 MainTab:CreateToggle({
-    Name = "Auto Fish",
+    Name = "Auto Fish (Keyboard Mode)",
     CurrentValue = false,
     Callback = function(v) if v then StartAutoFish() else StopAutoFish() end end,
 })
 
 MainTab:CreateToggle({
-    Name = "Debug Mode (Less Spam)",
+    Name = "Debug Logs",
     CurrentValue = false,
     Callback = function(v) Config.DebugMode = v end,
+})
+
+MainTab:CreateSlider({
+    Name = "Key Press Speed",
+    Range = {0.03, 0.15},
+    Increment = 0.01,
+    CurrentValue = 0.06,
+    Callback = function(v) Config.KeyPressDelay = v end,
+})
+
+MainTab:CreateSlider({
+    Name = "Total Key Presses",
+    Range = {20, 60},
+    Increment = 5,
+    CurrentValue = 40,
+    Callback = function(v) Config.TotalKeyPresses = v end,
 })
 
 MainTab:CreateSlider({
@@ -467,14 +446,6 @@ MainTab:CreateSlider({
     Increment = 0.5,
     CurrentValue = 2.5,
     Callback = function(v) Config.AfterMinigameWait = v end,
-})
-
-MainTab:CreateSlider({
-    Name = "Loop Delay",
-    Range = {0.3, 2},
-    Increment = 0.1,
-    CurrentValue = 0.6,
-    Callback = function(v) Config.LoopDelay = v end,
 })
 
 local StatsLabel = MainTab:CreateLabel("Loading...")
@@ -503,13 +474,15 @@ UtilityTab:CreateButton({Name = "Force Unstuck", Callback = function() UnequipRo
 UtilityTab:CreateButton({Name = "Rejoin", Callback = function() TeleportService:Teleport(game.PlaceId, LocalPlayer) end})
 
 local SettingsTab = Window:CreateTab("⚙️ Settings", 4483362458)
-SettingsTab:CreateLabel("Version: 8.2 RELIABLE")
-SettingsTab:CreateLabel("Method: Minigame Completion")
-SettingsTab:CreateLabel("Simple & Works!")
+SettingsTab:CreateLabel("Version: 8.3 KEYBOARD")
+SettingsTab:CreateLabel("Method: Virtual Key Input")
+SettingsTab:CreateLabel("⌨️ Space + E + Enter spam")
+SettingsTab:CreateLabel("No mouse movement!")
 SettingsTab:CreateButton({Name = "Destroy GUI", Callback = function() StopAutoFish(); task.wait(0.5); Rayfield:Destroy() end})
 
 GetCurrentRod()
 print("=================================")
-print("Fish It v8.2 RELIABLE")
-print("Method: Track by completion")
+print("Fish It v8.3 KEYBOARD")
+print("Method: Virtual Key Input")
+print("Keys: Space + E + Enter")
 print("=================================")
