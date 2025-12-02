@@ -1,15 +1,14 @@
 -------------------------------------------
------ Fish It Auto Farm - Custom Version
------ Based on: ZIAANHUB Script
------ Modified by: Your Name
------ Version: 1.0
+----- Fish It SPEED Edition - Ultra Fast Auto Farm
+----- No Animation Delay - Instant Catch
+----- Version: 2.0 Speed
 -------------------------------------------
 
 -- Load WindUI Library
 local WindUI = loadstring(game:HttpGet("https://github.com/Footagesus/WindUI/releases/latest/download/main.lua"))()
 
 -------------------------------------------
------ Services & Variables
+----- Services & Core Variables
 -------------------------------------------
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
@@ -28,25 +27,36 @@ local net = ReplicatedStorage:WaitForChild("Packages")
 local rodRemote = net:WaitForChild("RF/ChargeFishingRod")
 local miniGameRemote = net:WaitForChild("RF/RequestFishingMinigameStarted")
 local finishRemote = net:WaitForChild("RE/FishingCompleted")
+local equipRemote = net:WaitForChild("RE/EquipToolFromHotbar")
 
--- State Variables
-local AutoFishState = {
-    enabled = false,
-    perfectCast = true,
-    fishingActive = false,
-    delayInitialized = false
-}
+-- Text Effect for Fish Detection
+local REReplicateTextEffect = ReplicatedStorage.Packages._Index["sleitnick_net@0.2.0"].net["RE/ReplicateTextEffect"]
 
-local AutoSellState = {
-    enabled = false,
-    threshold = 60,
-    lastSellTime = 0,
-    sellDelay = 60
-}
-
-local AutoFavoriteState = {
-    enabled = false,
-    tiers = {
+-------------------------------------------
+----- Configuration
+-------------------------------------------
+local Config = {
+    AutoFish = false,
+    AutoSell = false,
+    AutoFavorite = false,
+    
+    -- Speed Settings
+    CastDelay = 0.05,          -- Delay setelah cast (minimal)
+    CatchDelay = 0.05,         -- Delay untuk catch fish
+    LoopDelay = 0.1,           -- Delay antar loop fishing
+    
+    -- Perfect Cast
+    PerfectCast = true,
+    PerfectCastX = -0.7499996423721313,
+    PerfectCastY = 1,
+    
+    -- Auto Sell Settings
+    SellThreshold = 60,
+    SellCooldown = 60,
+    LastSellTime = 0,
+    
+    -- Auto Favorite Tiers
+    FavoriteTiers = {
         ["Secret"] = true,
         ["Mythic"] = true,
         ["Legendary"] = true
@@ -54,42 +64,27 @@ local AutoFavoriteState = {
 }
 
 -------------------------------------------
------ Rod Delay Configuration
+----- Rod Delay Configuration (Optimized)
 -------------------------------------------
 local RodDelays = {
-    ["Ares Rod"] = {custom = 1.12, bypass = 1.45},
-    ["Angler Rod"] = {custom = 1.12, bypass = 1.45},
-    ["Ghostfinn Rod"] = {custom = 1.12, bypass = 1.45},
-    ["Astral Rod"] = {custom = 1.9, bypass = 1.45},
-    ["Chrome Rod"] = {custom = 2.3, bypass = 2},
-    ["Steampunk Rod"] = {custom = 2.5, bypass = 2.3},
-    ["Lucky Rod"] = {custom = 3.5, bypass = 3.6},
-    ["Midnight Rod"] = {custom = 3.3, bypass = 3.4},
-    ["Demascus Rod"] = {custom = 3.9, bypass = 3.8},
-    ["Grass Rod"] = {custom = 3.8, bypass = 3.9},
-    ["Luck Rod"] = {custom = 4.2, bypass = 4.1},
-    ["Carbon Rod"] = {custom = 4, bypass = 3.8},
-    ["Lava Rod"] = {custom = 4.2, bypass = 4.1},
-    ["Starter Rod"] = {custom = 4.3, bypass = 4.2},
+    ["Ares Rod"] = 0.8,
+    ["Angler Rod"] = 0.8,
+    ["Ghostfinn Rod"] = 0.8,
+    ["Astral Rod"] = 1.2,
+    ["Chrome Rod"] = 1.5,
+    ["Steampunk Rod"] = 1.8,
+    ["Lucky Rod"] = 2.0,
+    ["Midnight Rod"] = 2.0,
+    ["Demascus Rod"] = 2.2,
+    ["Grass Rod"] = 2.2,
+    ["Luck Rod"] = 2.5,
+    ["Carbon Rod"] = 2.3,
+    ["Lava Rod"] = 2.5,
+    ["Starter Rod"] = 2.8,
 }
 
-local customDelay = 4
-local bypassDelay = 1.45
-
--------------------------------------------
------ Animation Setup
--------------------------------------------
-local RodIdle = ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Animations"):WaitForChild("FishingRodReelIdle")
-local RodReel = ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Animations"):WaitForChild("EasyFishReelStart")
-local RodShake = ReplicatedStorage:WaitForChild("Modules"):WaitForChild("Animations"):WaitForChild("CastFromFullChargePosition1Hand")
-
-local character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-local humanoid = character:WaitForChild("Humanoid")
-local animator = humanoid:FindFirstChildOfClass("Animator") or Instance.new("Animator", humanoid)
-
-local RodShakeAnim = animator:LoadAnimation(RodShake)
-local RodIdleAnim = animator:LoadAnimation(RodIdle)
-local RodReelAnim = animator:LoadAnimation(RodReel)
+local CurrentRodDelay = 1.0
+local CurrentRod = "Unknown"
 
 -------------------------------------------
 ----- Anti-AFK System
@@ -102,19 +97,21 @@ LocalPlayer.Idled:Connect(function()
     VirtualUser:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
 end)
 
-for i,v in next, getconnections(LocalPlayer.Idled) do
+for i,v in pairs(getconnections(LocalPlayer.Idled)) do
     v:Disable()
 end
 
 -------------------------------------------
------ Auto Reconnect System
+----- Auto Reconnect
 -------------------------------------------
 local function AutoReconnect()
-    while task.wait(5) do
-        if not LocalPlayer or not LocalPlayer:IsDescendantOf(game) then
-            TeleportService:Teleport(game.PlaceId)
+    task.spawn(function()
+        while task.wait(5) do
+            if not LocalPlayer or not LocalPlayer:IsDescendantOf(game) then
+                TeleportService:Teleport(game.PlaceId)
+            end
         end
-    end
+    end)
 end
 
 LocalPlayer.OnTeleport:Connect(function(teleportState)
@@ -123,10 +120,10 @@ LocalPlayer.OnTeleport:Connect(function(teleportState)
     end
 end)
 
-task.spawn(AutoReconnect)
+AutoReconnect()
 
 -------------------------------------------
------ FPS Boost System
+----- FPS Boost
 -------------------------------------------
 local function BoostFPS()
     for _, v in pairs(game:GetDescendants()) do
@@ -151,427 +148,490 @@ local function BoostFPS()
 end
 
 -------------------------------------------
------ Notification Functions
+----- Notification System
 -------------------------------------------
-local function NotifySuccess(title, message, duration)
+local function Notify(title, message, icon)
     WindUI:Notify({
         Title = title,
         Content = message,
-        Duration = duration or 3,
-        Icon = "circle-check"
-    })
-end
-
-local function NotifyError(title, message, duration)
-    WindUI:Notify({
-        Title = title,
-        Content = message,
-        Duration = duration or 3,
-        Icon = "ban"
-    })
-end
-
-local function NotifyInfo(title, message, duration)
-    WindUI:Notify({
-        Title = title,
-        Content = message,
-        Duration = duration or 3,
-        Icon = "info"
-    })
-end
-
-local function NotifyWarning(title, message, duration)
-    WindUI:Notify({
-        Title = title,
-        Content = message,
-        Duration = duration or 3,
-        Icon = "triangle-alert"
+        Duration = 3,
+        Icon = icon or "circle-check"
     })
 end
 
 -------------------------------------------
 ----- Rod Detection System
 -------------------------------------------
-local function getValidRodName()
+local function GetCurrentRod()
     local display = LocalPlayer.PlayerGui:WaitForChild("Backpack"):WaitForChild("Display")
     for _, tile in ipairs(display:GetChildren()) do
-        local success, itemNamePath = pcall(function()
-            return tile.Inner.Tags.ItemName
-        end)
-        if success and itemNamePath and itemNamePath:IsA("TextLabel") then
-            local name = itemNamePath.Text
-            if RodDelays[name] then
-                return name
+        pcall(function()
+            local itemName = tile.Inner.Tags.ItemName
+            if itemName and itemName:IsA("TextLabel") then
+                local rodName = itemName.Text
+                if RodDelays[rodName] then
+                    CurrentRod = rodName
+                    CurrentRodDelay = RodDelays[rodName]
+                    return rodName
+                end
             end
-        end
+        end)
     end
-    return nil
+    CurrentRod = "Unknown"
+    CurrentRodDelay = 1.0
+    return "Unknown"
 end
 
-local function updateDelayBasedOnRod(showNotify)
-    if AutoFishState.delayInitialized then return end
-    
-    local rodName = getValidRodName()
-    if rodName and RodDelays[rodName] then
-        customDelay = RodDelays[rodName].custom
-        bypassDelay = RodDelays[rodName].bypass
-        AutoFishState.delayInitialized = true
-        
-        if showNotify and AutoFishState.enabled then
-            NotifySuccess("Rod Detected", string.format("Rod: %s | Delay: %.2fs", rodName, customDelay))
-        end
-    else
-        customDelay = 4
-        bypassDelay = 1
-        AutoFishState.delayInitialized = true
-        
-        if showNotify and AutoFishState.enabled then
-            NotifyWarning("Rod Detection", "Using default delay: 4s")
-        end
-    end
-end
-
-local function setupRodWatcher()
+-- Watch for rod changes
+local function WatchRodChanges()
     local display = LocalPlayer.PlayerGui:WaitForChild("Backpack"):WaitForChild("Display")
     display.ChildAdded:Connect(function()
-        task.wait(0.05)
-        if not AutoFishState.delayInitialized then
-            updateDelayBasedOnRod(true)
-        end
+        task.wait(0.1)
+        GetCurrentRod()
     end)
 end
 
-setupRodWatcher()
+WatchRodChanges()
 
 -------------------------------------------
------ Auto Fish Logic
+----- INSTANT CATCH SYSTEM (No Animation)
 -------------------------------------------
-local REReplicateTextEffect = ReplicatedStorage.Packages._Index["sleitnick_net@0.2.0"].net["RE/ReplicateTextEffect"]
+local FishingState = {
+    Active = false,
+    Catching = false
+}
 
+-- Detect fish bite (Exclaim effect)
 REReplicateTextEffect.OnClientEvent:Connect(function(data)
-    if AutoFishState.enabled and AutoFishState.fishingActive
-    and data and data.TextData and data.TextData.EffectType == "Exclaim" then
-        
-        local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
-        if myHead and data.Container == myHead then
-            task.spawn(function()
-                for i = 1, 3 do
-                    task.wait(bypassDelay)
-                    finishRemote:FireServer()
-                end
-            end)
+    if Config.AutoFish and FishingState.Active then
+        if data and data.TextData and data.TextData.EffectType == "Exclaim" then
+            local myHead = LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("Head")
+            if myHead and data.Container == myHead then
+                FishingState.Catching = true
+                
+                -- Instant catch (spam finish remote)
+                task.spawn(function()
+                    for i = 1, 5 do
+                        finishRemote:FireServer()
+                        task.wait(Config.CatchDelay)
+                    end
+                    FishingState.Catching = false
+                end)
+            end
         end
     end
 end)
 
-local function StartAutoFish()
-    if AutoFishState.enabled then return end
+-------------------------------------------
+----- ULTRA FAST AUTO FISHING (Skip Animation)
+-------------------------------------------
+local function StartFastAutoFish()
+    if Config.AutoFish then return end
+    Config.AutoFish = true
     
-    AutoFishState.enabled = true
-    updateDelayBasedOnRod(true)
-    NotifySuccess("Auto Fish", "Auto Fishing Started!")
+    GetCurrentRod()
+    Notify("Speed Auto Fish", "Ultra Fast Mode Activated! Rod: " .. CurrentRod, "zap")
     
     task.spawn(function()
-        while AutoFishState.enabled do
-            pcall(function()
-                AutoFishState.fishingActive = true
-
-                -- Equip Rod
-                local equipRemote = net:WaitForChild("RE/EquipToolFromHotbar")
-                equipRemote:FireServer(1)
-                task.wait(0.1)
-
-                -- Charge Rod
-                local timestamp = workspace:GetServerTimeNow()
-                RodShakeAnim:Play()
-                rodRemote:InvokeServer(timestamp)
-                task.wait(0.5)
-
-                -- Cast Rod with Perfect Cast Logic
-                local baseX, baseY = -0.7499996423721313, 1
-                local x, y
+        while Config.AutoFish do
+            local success = pcall(function()
+                FishingState.Active = true
                 
-                if AutoFishState.perfectCast then
-                    x = baseX + (math.random(-500, 500) / 10000000)
-                    y = baseY + (math.random(-500, 500) / 10000000)
+                -- Step 1: Equip Rod (Instant)
+                equipRemote:FireServer(1)
+                task.wait(Config.CastDelay)
+                
+                -- Step 2: Charge Rod (Skip animation)
+                local timestamp = workspace:GetServerTimeNow()
+                rodRemote:InvokeServer(timestamp)
+                task.wait(Config.CastDelay)
+                
+                -- Step 3: Cast Rod with Perfect Cast
+                local x, y
+                if Config.PerfectCast then
+                    x = Config.PerfectCastX + (math.random(-500, 500) / 10000000)
+                    y = Config.PerfectCastY + (math.random(-500, 500) / 10000000)
                 else
                     x = math.random(-1000, 1000) / 1000
                     y = math.random(0, 1000) / 1000
                 end
-
-                RodIdleAnim:Play()
+                
                 miniGameRemote:InvokeServer(x, y)
-
-                task.wait(customDelay)
-                AutoFishState.fishingActive = false
+                
+                -- Wait for fish bite (optimized delay based on rod)
+                task.wait(CurrentRodDelay)
+                
+                FishingState.Active = false
             end)
+            
+            if not success then
+                warn("Fishing error, retrying...")
+            end
+            
+            -- Minimal loop delay untuk max speed
+            task.wait(Config.LoopDelay)
         end
+        
+        Notify("Auto Fish", "Auto Fishing Stopped", "ban")
     end)
 end
 
-local function StopAutoFish()
-    AutoFishState.enabled = false
-    AutoFishState.fishingActive = false
-    AutoFishState.delayInitialized = false
-    
-    RodIdleAnim:Stop()
-    RodShakeAnim:Stop()
-    RodReelAnim:Stop()
-    
-    NotifyWarning("Auto Fish", "Auto Fishing Stopped!")
+local function StopFastAutoFish()
+    Config.AutoFish = false
+    FishingState.Active = false
+    FishingState.Catching = false
 end
 
 -------------------------------------------
------ Auto Sell System
+----- AUTO SELL SYSTEM
 -------------------------------------------
 local function StartAutoSell()
     task.spawn(function()
-        while AutoSellState.enabled do
+        while Config.AutoSell do
             pcall(function()
-                if not Replion then return end
+                -- Check if Replion is loaded
+                if not Replion then 
+                    task.wait(5)
+                    return 
+                end
                 
                 local DataReplion = Replion.Client:WaitReplion("Data")
                 local items = DataReplion and DataReplion:Get({"Inventory","Items"})
                 
-                if type(items) ~= "table" then return end
-
-                local unfavoritedCount = 0
-                for _, item in ipairs(items) do
-                    if not item.Favorited then
-                        unfavoritedCount = unfavoritedCount + (item.Count or 1)
-                    end
-                end
-
-                if unfavoritedCount >= AutoSellState.threshold and 
-                   os.time() - AutoSellState.lastSellTime >= AutoSellState.sellDelay then
+                if type(items) == "table" then
+                    local unfavoritedCount = 0
                     
-                    local sellFunc = net:FindFirstChild("RF/SellAllItems")
-                    if sellFunc then
-                        sellFunc:InvokeServer()
-                        NotifyInfo("Auto Sell", "Selling non-favorited items...")
-                        AutoSellState.lastSellTime = os.time()
+                    for _, item in ipairs(items) do
+                        if not item.Favorited then
+                            unfavoritedCount = unfavoritedCount + (item.Count or 1)
+                        end
+                    end
+                    
+                    -- Auto sell if threshold reached
+                    if unfavoritedCount >= Config.SellThreshold then
+                        local currentTime = os.time()
+                        if currentTime - Config.LastSellTime >= Config.SellCooldown then
+                            local sellRemote = net:FindFirstChild("RF/SellAllItems")
+                            if sellRemote then
+                                sellRemote:InvokeServer()
+                                Config.LastSellTime = currentTime
+                                Notify("Auto Sell", "Sold " .. unfavoritedCount .. " fish!", "badge-dollar-sign")
+                            end
+                        end
                     end
                 end
             end)
+            
             task.wait(10)
         end
     end)
 end
 
 -------------------------------------------
------ Auto Favorite System
+----- AUTO FAVORITE SYSTEM
 -------------------------------------------
 local function StartAutoFavorite()
     task.spawn(function()
-        while AutoFavoriteState.enabled do
+        while Config.AutoFavorite do
             pcall(function()
-                if not Replion or not ItemUtility then return end
+                if not Replion or not ItemUtility then 
+                    task.wait(5)
+                    return 
+                end
                 
                 local DataReplion = Replion.Client:WaitReplion("Data")
                 local items = DataReplion and DataReplion:Get({"Inventory","Items"})
                 
-                if type(items) ~= "table" then return end
-                
-                for _, item in ipairs(items) do
-                    local base = ItemUtility:GetItemData(item.Id)
-                    if base and base.Data and AutoFavoriteState.tiers[base.Data.Tier] and not item.Favorited then
-                        item.Favorited = true
+                if type(items) == "table" then
+                    for _, item in ipairs(items) do
+                        local itemData = ItemUtility:GetItemData(item.Id)
+                        if itemData and itemData.Data then
+                            local tier = itemData.Data.Tier
+                            if Config.FavoriteTiers[tier] and not item.Favorited then
+                                item.Favorited = true
+                            end
+                        end
                     end
                 end
             end)
+            
             task.wait(5)
         end
     end)
 end
 
 -------------------------------------------
------ UI Creation
+----- UI CREATION
 -------------------------------------------
 local Window = WindUI:CreateWindow({
-    Title = "Fish It - Custom Edition",
-    Icon = "fish",
-    Author = "Modified for You",
-    Folder = "FishItCustom",
-    Size = UDim2.fromOffset(600, 450),
-    Theme = "Indigo",
+    Title = "Fish It - SPEED Edition",
+    Icon = "zap",
+    Author = "Ultra Fast Auto Farm",
+    Folder = "FishItSpeed",
+    Size = UDim2.fromOffset(550, 400),
+    Theme = "Darker",
     KeySystem = false
 })
 
-Window:SetToggleKey(Enum.KeyCode.G)
+Window:SetToggleKey(Enum.KeyCode.RightShift)
 WindUI:SetNotificationLower(true)
 
-NotifySuccess("Script Loaded", "Fish It Custom Edition Ready!", 5)
+Notify("Speed Edition Loaded", "Press RIGHT SHIFT to toggle UI", "rocket")
 
 -------------------------------------------
------ Auto Fishing Tab
+----- MAIN TAB
 -------------------------------------------
-local AutoFishTab = Window:Tab({
-    Title = "Auto Fishing",
+local MainTab = Window:Tab({
+    Title = "Speed Fishing",
+    Icon = "zap"
+})
+
+local FishingSection = MainTab:Section({
+    Title = "Ultra Fast Auto Fishing",
     Icon = "fish"
 })
 
-local AutoFishSection = AutoFishTab:Section({
-    Title = "Fishing Automation",
-    Icon = "fish"
-})
-
-AutoFishSection:Toggle({
-    Title = "Auto Fish",
-    Content = "Automatically fish with rod detection",
+FishingSection:Toggle({
+    Title = "Speed Auto Fish",
+    Content = "Ultra fast fishing with animation skip",
     Callback = function(value)
         if value then
-            StartAutoFish()
+            StartFastAutoFish()
         else
-            StopAutoFish()
+            StopFastAutoFish()
         end
     end
 })
 
-AutoFishSection:Toggle({
+FishingSection:Toggle({
     Title = "Perfect Cast",
-    Content = "Enable perfect casting accuracy",
+    Content = "Always perfect cast for maximum catch rate",
     Value = true,
     Callback = function(value)
-        AutoFishState.perfectCast = value
+        Config.PerfectCast = value
     end
 })
 
-AutoFishSection:Input({
-    Title = "Bypass Delay",
-    Content = "Delay between fish detection (seconds)",
-    Placeholder = "Example: 1.45",
+FishingSection:Slider({
+    Title = "Cast Speed",
+    Content = "Delay between casts (lower = faster)",
+    Min = 0.05,
+    Max = 1.0,
+    Default = 0.1,
     Callback = function(value)
-        local number = tonumber(value)
-        if number then
-            bypassDelay = number
-            NotifySuccess("Delay Updated", "Bypass delay set to " .. number .. "s")
-        else
-            NotifyError("Invalid Input", "Please enter a valid number")
-        end
-    end,
+        Config.LoopDelay = value
+        Notify("Speed Updated", "Loop delay: " .. value .. "s", "gauge")
+    end
 })
 
-AutoFishSection:Toggle({
-    Title = "Auto Sell",
-    Content = "Auto sell non-favorited fish when count > 60",
+FishingSection:Slider({
+    Title = "Catch Response Time",
+    Content = "Delay for instant catch (0.05 = fastest)",
+    Min = 0.01,
+    Max = 0.5,
+    Default = 0.05,
     Callback = function(value)
-        AutoSellState.enabled = value
+        Config.CatchDelay = value
+    end
+})
+
+local AutoSection = MainTab:Section({
+    Title = "Automation",
+    Icon = "bot"
+})
+
+AutoSection:Toggle({
+    Title = "Auto Sell",
+    Content = "Auto sell when > 60 non-favorited fish",
+    Callback = function(value)
+        Config.AutoSell = value
         if value then
             StartAutoSell()
-            NotifySuccess("Auto Sell", "Auto Sell Enabled")
-        else
-            NotifyWarning("Auto Sell", "Auto Sell Disabled")
+            Notify("Auto Sell", "Enabled", "shopping-cart")
         end
     end
 })
 
-AutoFishSection:Toggle({
+AutoSection:Toggle({
     Title = "Auto Favorite",
-    Content = "Auto favorite Secret/Mythic/Legendary fish",
+    Content = "Auto favorite Secret/Mythic/Legendary",
     Callback = function(value)
-        AutoFavoriteState.enabled = value
+        Config.AutoFavorite = value
         if value then
             StartAutoFavorite()
-            NotifySuccess("Auto Favorite", "Auto Favorite Enabled")
-        else
-            NotifyWarning("Auto Favorite", "Auto Favorite Disabled")
+            Notify("Auto Favorite", "Enabled", "star")
+        end
+    end
+})
+
+AutoSection:Slider({
+    Title = "Sell Threshold",
+    Content = "Sell when fish count reaches",
+    Min = 20,
+    Max = 100,
+    Default = 60,
+    Callback = function(value)
+        Config.SellThreshold = value
+    end
+})
+
+-------------------------------------------
+----- TELEPORT TAB
+-------------------------------------------
+local TeleportTab = Window:Tab({
+    Title = "Teleport",
+    Icon = "map-pin"
+})
+
+local TPSection = TeleportTab:Section({
+    Title = "Quick Travel",
+    Icon = "navigation"
+})
+
+local Islands = {
+    ["Kohana (Spawn)"] = Vector3.new(-658, 3, 719),
+    ["Tropical Grove"] = Vector3.new(-2038, 3, 3650),
+    ["Coral Reefs"] = Vector3.new(-3095, 1, 2177),
+    ["Esoteric Depths"] = Vector3.new(3157, -1303, 1439),
+    ["Kohana Volcano"] = Vector3.new(-519, 24, 189),
+    ["Winter Fest"] = Vector3.new(1611, 4, 3280),
+    ["Stingray Shores"] = Vector3.new(-32, 4, 2773),
+    ["Crater Island"] = Vector3.new(968, 1, 4854),
+}
+
+local islandNames = {}
+for name, _ in pairs(Islands) do
+    table.insert(islandNames, name)
+end
+
+TPSection:Dropdown({
+    Title = "Teleport to Island",
+    Values = islandNames,
+    Callback = function(selected)
+        local pos = Islands[selected]
+        if pos then
+            local char = workspace:FindFirstChild("Characters")
+            if char then
+                char = char:FindFirstChild(LocalPlayer.Name)
+                if char then
+                    local hrp = char:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        hrp.CFrame = CFrame.new(pos + Vector3.new(0, 5, 0))
+                        Notify("Teleported", "Now at: " .. selected, "map-pin")
+                    end
+                end
+            end
         end
     end
 })
 
 -------------------------------------------
------ Utility Tab
+----- UTILITY TAB
 -------------------------------------------
 local UtilityTab = Window:Tab({
     Title = "Utility",
     Icon = "settings"
 })
 
-local TeleportSection = UtilityTab:Section({
-    Title = "Teleport",
-    Icon = "map-pin"
+local UtilSection = UtilityTab:Section({
+    Title = "Performance & Server",
+    Icon = "zap"
 })
 
--- Island Coordinates
-local islandCoords = {
-    ["Kohana"] = Vector3.new(-658, 3, 719),
-    ["Tropical Grove"] = Vector3.new(-2038, 3, 3650),
-    ["Coral Reefs"] = Vector3.new(-3095, 1, 2177),
-    ["Esoteric Depths"] = Vector3.new(3157, -1303, 1439),
-    ["Kohana Volcano"] = Vector3.new(-519, 24, 189),
-    ["Winter Fest"] = Vector3.new(1611, 4, 3280),
-}
-
-local islandNames = {}
-for name, _ in pairs(islandCoords) do
-    table.insert(islandNames, name)
-end
-
-TeleportSection:Dropdown({
-    Title = "Teleport to Island",
-    Content = "Quick travel to islands",
-    Values = islandNames,
-    Callback = function(selectedName)
-        local position = islandCoords[selectedName]
-        if position then
-            local char = workspace:WaitForChild("Characters"):FindFirstChild(LocalPlayer.Name)
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if hrp then
-                hrp.CFrame = CFrame.new(position + Vector3.new(0, 5, 0))
-                NotifySuccess("Teleported", "You are now at " .. selectedName)
-            end
-        end
+UtilSection:Button({
+    Title = "Boost FPS",
+    Content = "Remove graphics for max performance",
+    Callback = function()
+        BoostFPS()
+        Notify("FPS Boost", "Graphics optimized!", "zap")
     end
 })
 
-local ServerSection = UtilityTab:Section({
-    Title = "Server",
-    Icon = "server"
-})
-
-ServerSection:Button({
+UtilSection:Button({
     Title = "Rejoin Server",
-    Content = "Rejoin current server",
+    Content = "Reconnect to current server",
     Callback = function()
         TeleportService:Teleport(game.PlaceId, LocalPlayer)
     end
 })
 
-ServerSection:Button({
-    Title = "Boost FPS",
-    Content = "Optimize graphics for better performance",
+UtilSection:Button({
+    Title = "Server Hop",
+    Content = "Find and join a new server",
     Callback = function()
-        BoostFPS()
-        NotifySuccess("FPS Boost", "Graphics optimized!")
+        local Http = game:GetService("HttpService")
+        local TPS = game:GetService("TeleportService")
+        local Api = "https://games.roblox.com/v1/games/"
+        
+        local _place = game.PlaceId
+        local _servers = Api.._place.."/servers/Public?sortOrder=Asc&limit=100"
+        
+        function ListServers(cursor)
+            local Raw = game:HttpGet(_servers .. ((cursor and "&cursor="..cursor) or ""))
+            return Http:JSONDecode(Raw)
+        end
+        
+        local Server, Next; repeat
+            local Servers = ListServers(Next)
+            Server = Servers.data[1]
+            Next = Servers.nextPageCursor
+        until Server
+        
+        TPS:TeleportToPlaceInstance(_place, Server.id, LocalPlayer)
+    end
+})
+
+local RodInfoSection = UtilityTab:Section({
+    Title = "Rod Information",
+    Icon = "info"
+})
+
+RodInfoSection:Button({
+    Title = "Detect Current Rod",
+    Content = "Show current rod and delay",
+    Callback = function()
+        GetCurrentRod()
+        Notify("Rod Info", "Rod: " .. CurrentRod .. " | Delay: " .. CurrentRodDelay .. "s", "info")
     end
 })
 
 -------------------------------------------
------ Settings Tab
+----- SETTINGS TAB
 -------------------------------------------
 local SettingsTab = Window:Tab({
     Title = "Settings",
-    Icon = "user-cog"
+    Icon = "settings"
 })
 
 local InfoSection = SettingsTab:Section({
-    Title = "Information",
+    Title = "Script Info",
     Icon = "info"
 })
 
 InfoSection:Paragraph({
-    Title = "Fish It - Custom Edition",
-    Content = "Modified auto fishing script with advanced features"
+    Title = "Fish It - Speed Edition",
+    Content = "Ultra fast auto fishing with animation skip technology for maximum efficiency"
 })
 
-InfoSection:Label({
-    Title = "Version",
-    Content = "1.0 Custom"
+InfoSection:Label({Title = "Version", Content = "2.0 Speed"})
+InfoSection:Label({Title = "Mode", Content = "Ultra Fast (No Animation)"})
+InfoSection:Label({Title = "Status", Content = "Active & Optimized"})
+
+InfoSection:Button({
+    Title = "Destroy GUI",
+    Content = "Close and remove script",
+    Callback = function()
+        Config.AutoFish = false
+        Config.AutoSell = false
+        Config.AutoFavorite = false
+        Notify("Goodbye!", "Script unloaded", "x")
+        task.wait(1)
+        Window:Destroy()
+    end
 })
 
-InfoSection:Label({
-    Title = "Status",
-    Content = "Active"
-})
-
-NotifySuccess("Ready!", "All features loaded successfully", 5)
+-------------------------------------------
+----- INITIALIZATION
+-------------------------------------------
+GetCurrentRod()
+Notify("Ready!", "All systems loaded. Toggle features to start!", "rocket")
