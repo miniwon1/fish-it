@@ -1,7 +1,7 @@
 -------------------------------------------
------ Fish It FINAL Edition v3.2
------ Optimized & Stable
------ Proven Working!
+----- Fish It FINAL Edition v3.3
+----- With Fish Catch Notification
+----- Shows Fish Name + Rarity
 -------------------------------------------
 
 -- Load Rayfield UI Library
@@ -43,24 +43,42 @@ local unequipRemote = net:WaitForChild("RE/UnequipTool", 10)
 local REReplicateTextEffect = net:WaitForChild("RE/ReplicateTextEffect", 10)
 
 -------------------------------------------
+----- Load Replion & ItemUtility
+-------------------------------------------
+local Replion = nil
+local ItemUtility = nil
+
+-- Wait for game modules to load
+task.spawn(function()
+    task.wait(3)
+    pcall(function()
+        Replion = _G.Replion or require(ReplicatedStorage.Packages._Index["nightcycle_replica@0.2.2"].replica)
+        ItemUtility = _G.ItemUtility or require(ReplicatedStorage.Shared.Modules.ItemUtility)
+        _G.Replion = Replion
+        _G.ItemUtility = ItemUtility
+    end)
+end)
+
+-------------------------------------------
 ----- Configuration (OPTIMIZED)
 -------------------------------------------
 local Config = {
     AutoFish = false,
     AutoSell = false,
     AutoFavorite = false,
+    ShowFishNotif = true, -- NEW: Show fish caught notification
     
     -- Optimized Settings
     EquipDelay = 0.4,
     ChargeDelay = 0.6,
     CastDelay = 0.4,
     
-    -- Minigame Settings (PROVEN WORKING)
+    -- Minigame Settings
     ReelSpeed = 0.1,
-    ReelAttempts = 15, -- Reduced from 30
+    ReelAttempts = 15,
     WaitAfterBite = 0.3,
     
-    LoopDelay = 1.0, -- Increased for stability
+    LoopDelay = 1.0,
     
     -- Perfect Cast
     PerfectCast = true,
@@ -112,8 +130,116 @@ local Stats = {
     StartTime = os.time(),
     SessionTime = "0m 0s",
     BiteDetected = 0,
-    SuccessfulCatches = 0
+    SuccessfulCatches = 0,
+    LastFishCaught = "None"
 }
+
+-------------------------------------------
+----- Rarity Colors (for notification)
+-------------------------------------------
+local RarityColors = {
+    ["Common"] = "🟢",
+    ["Uncommon"] = "🟦",
+    ["Rare"] = "🟪",
+    ["Epic"] = "🟣",
+    ["Legendary"] = "🟠",
+    ["Mythic"] = "🔴",
+    ["Secret"] = "⭐",
+    ["Limited"] = "💎"
+}
+
+-------------------------------------------
+----- INVENTORY MONITOR (NEW)
+-------------------------------------------
+local InventoryCache = {}
+
+local function GetInventorySnapshot()
+    local snapshot = {}
+    pcall(function()
+        if not Replion then return end
+        
+        local DataReplion = Replion.Client:WaitReplion("Data")
+        if not DataReplion then return end
+        
+        local items = DataReplion:Get({"Inventory","Items"})
+        
+        if type(items) == "table" then
+            for _, item in ipairs(items) do
+                if item.Id then
+                    snapshot[item.Id] = {
+                        Count = item.Count or 1,
+                        Name = item.Name or "Unknown",
+                        Tier = item.Tier or "Common"
+                    }
+                end
+            end
+        end
+    end)
+    return snapshot
+end
+
+local function DetectNewFish()
+    task.spawn(function()
+        task.wait(1) -- Wait for inventory to update
+        
+        local newSnapshot = GetInventorySnapshot()
+        
+        -- Compare with cache to find new fish
+        for id, data in pairs(newSnapshot) do
+            local oldData = InventoryCache[id]
+            
+            if not oldData then
+                -- Completely new fish
+                local fishName = data.Name
+                local fishTier = data.Tier
+                local rarityIcon = RarityColors[fishTier] or "🐟"
+                
+                Stats.LastFishCaught = fishName .. " (" .. fishTier .. ")"
+                
+                if Config.ShowFishNotif then
+                    Rayfield:Notify({
+                        Title = rarityIcon .. " " .. fishTier .. " Fish!",
+                        Content = "Caught: " .. fishName,
+                        Duration = 3,
+                        Image = 4483362458,
+                    })
+                end
+                
+                print("[FISH CAUGHT] " .. rarityIcon .. " " .. fishName .. " (" .. fishTier .. ")")
+                
+            elseif oldData.Count < data.Count then
+                -- Same fish, but count increased
+                local fishName = data.Name
+                local fishTier = data.Tier
+                local rarityIcon = RarityColors[fishTier] or "🐟"
+                local newCount = data.Count
+                
+                Stats.LastFishCaught = fishName .. " (" .. fishTier .. ")"
+                
+                if Config.ShowFishNotif then
+                    Rayfield:Notify({
+                        Title = rarityIcon .. " " .. fishTier .. " Fish!",
+                        Content = "Caught: " .. fishName .. " x" .. newCount,
+                        Duration = 3,
+                        Image = 4483362458,
+                    })
+                end
+                
+                print("[FISH CAUGHT] " .. rarityIcon .. " " .. fishName .. " x" .. newCount .. " (" .. fishTier .. ")")
+            end
+        end
+        
+        -- Update cache
+        InventoryCache = newSnapshot
+    end)
+end
+
+-- Get initial inventory snapshot
+task.spawn(function()
+    task.wait(5) -- Wait for game to fully load
+    InventoryCache = GetInventorySnapshot()
+    print("[INVENTORY] Initial snapshot captured")
+end)
 
 -------------------------------------------
 ----- Anti-AFK
@@ -189,7 +315,7 @@ local function ForceUnstuck()
 end
 
 -------------------------------------------
------ MINIGAME HANDLER (PROVEN METHOD)
+----- MINIGAME HANDLER
 -------------------------------------------
 local FishingState = {
     Active = false,
@@ -201,7 +327,6 @@ local FishingState = {
 local function CompleteMinigame()
     FishingState.Reeling = true
     
-    -- Proven method from your logs
     for i = 1, Config.ReelAttempts do
         pcall(function()
             finishRemote:FireServer()
@@ -213,7 +338,6 @@ local function CompleteMinigame()
         task.wait(Config.ReelSpeed)
     end
     
-    -- Final finish signals
     task.wait(0.3)
     for i = 1, 3 do
         pcall(function() finishRemote:FireServer() end)
@@ -248,6 +372,9 @@ REReplicateTextEffect.OnClientEvent:Connect(function(data)
         if success then
             Stats.SuccessfulCatches = Stats.SuccessfulCatches + 1
             Stats.FishCaught = Stats.FishCaught + 1
+            
+            -- Detect new fish in inventory
+            DetectNewFish()
         end
         
         task.wait(0.5)
@@ -341,8 +468,8 @@ local function StartAutoSell()
     task.spawn(function()
         while Config.AutoSell do
             pcall(function()
-                if not _G.Replion then return end
-                local DataReplion = _G.Replion.Client:WaitReplion("Data")
+                if not Replion then return end
+                local DataReplion = Replion.Client:WaitReplion("Data")
                 local items = DataReplion and DataReplion:Get({"Inventory","Items"})
                 
                 if type(items) == "table" then
@@ -358,6 +485,10 @@ local function StartAutoSell()
                             Config.LastSellTime = os.time()
                             Stats.TotalSold = Stats.TotalSold + count
                             Rayfield:Notify({Title = "Auto Sell", Content = "Sold " .. count .. " fish!", Duration = 3, Image = 4483362458})
+                            
+                            -- Update inventory cache after selling
+                            task.wait(1)
+                            InventoryCache = GetInventorySnapshot()
                         end
                     end
                 end
@@ -374,13 +505,13 @@ local function StartAutoFavorite()
     task.spawn(function()
         while Config.AutoFavorite do
             pcall(function()
-                if not _G.Replion or not _G.ItemUtility then return end
-                local DataReplion = _G.Replion.Client:WaitReplion("Data")
+                if not Replion or not ItemUtility then return end
+                local DataReplion = Replion.Client:WaitReplion("Data")
                 local items = DataReplion and DataReplion:Get({"Inventory","Items"})
                 
                 if type(items) == "table" then
                     for _, item in ipairs(items) do
-                        local itemData = _G.ItemUtility:GetItemData(item.Id)
+                        local itemData = ItemUtility:GetItemData(item.Id)
                         if itemData and itemData.Data and Config.FavoriteTiers[itemData.Data.Tier] and not item.Favorited then
                             item.Favorited = true
                         end
@@ -406,22 +537,28 @@ end)
 ----- UI
 -------------------------------------------
 local Window = Rayfield:CreateWindow({
-    Name = "Fish It - FINAL v3.2",
+    Name = "Fish It - FINAL v3.3",
     LoadingTitle = "Loading Final Edition...",
-    LoadingSubtitle = "Optimized & Stable",
+    LoadingSubtitle = "With Fish Notifications",
     ConfigurationSaving = {Enabled = true, FolderName = "FishItFinal", FileName = "FinalConfig"},
     Discord = {Enabled = false},
     KeySystem = false,
 })
 
-Rayfield:Notify({Title = "Final Edition", Content = "Optimized & Ready!", Duration = 3, Image = 4483362458})
+Rayfield:Notify({Title = "Final Edition v3.3", Content = "Fish notifications active!", Duration = 3, Image = 4483362458})
 
 local MainTab = Window:CreateTab("🎣 Auto Fish", 4483362458)
 
 MainTab:CreateToggle({
-    Name = "Auto Fish (Optimized)",
+    Name = "Auto Fish",
     CurrentValue = false,
     Callback = function(v) if v then StartAutoFish() else StopAutoFish() end end,
+})
+
+MainTab:CreateToggle({
+    Name = "Show Fish Notifications",
+    CurrentValue = true,
+    Callback = function(v) Config.ShowFishNotif = v end,
 })
 
 MainTab:CreateToggle({
@@ -447,12 +584,14 @@ MainTab:CreateSlider({
 })
 
 local StatsLabel = MainTab:CreateLabel("Loading...")
+local LastFishLabel = MainTab:CreateLabel("Last Fish: None")
 
 task.spawn(function()
     while task.wait(2) do
         local rate = Stats.BiteDetected > 0 and math.floor((Stats.SuccessfulCatches / Stats.BiteDetected) * 100) or 0
         StatsLabel:Set(string.format("Fish: %d | Bites: %d | Success: %d%% | Time: %s", 
             Stats.FishCaught, Stats.BiteDetected, rate, Stats.SessionTime))
+        LastFishLabel:Set("Last Fish: " .. Stats.LastFishCaught)
     end
 end)
 
@@ -478,18 +617,29 @@ UtilityTab:CreateButton({Name = "Detect Rod", Callback = function()
     Rayfield:Notify({Title = "Rod Info", Content = CurrentRod .. " | " .. CurrentRodDelay .. "s", Duration = 3, Image = 4483362458})
 end})
 
+UtilityTab:CreateButton({Name = "Refresh Inventory Cache", Callback = function()
+    InventoryCache = GetInventorySnapshot()
+    Rayfield:Notify({Title = "Inventory Cache", Content = "Refreshed successfully!", Duration = 2, Image = 4483362458})
+end})
+
 UtilityTab:CreateButton({Name = "Reset Stats", Callback = function()
     Stats.FishCaught = 0
     Stats.TotalSold = 0
     Stats.BiteDetected = 0
     Stats.SuccessfulCatches = 0
+    Stats.LastFishCaught = "None"
     Stats.StartTime = os.time()
 end})
 
 local SettingsTab = Window:CreateTab("⚙️ Settings", 4483362458)
-SettingsTab:CreateLabel("Version: 3.2 Final")
-SettingsTab:CreateLabel("Status: Optimized & Stable")
+SettingsTab:CreateLabel("Version: 3.3 Final")
+SettingsTab:CreateLabel("Status: Fish Notifications ON")
+SettingsTab:CreateLabel("Features: Auto Detect Fish Name")
 SettingsTab:CreateButton({Name = "Destroy GUI", Callback = function() StopAutoFish(); task.wait(0.5); Rayfield:Destroy() end})
 
 GetCurrentRod()
-print("Fish It Final v3.2 | Rod: " .. CurrentRod .. " | READY!")
+print("=================================")
+print("Fish It Final v3.3 Loaded")
+print("Rod: " .. CurrentRod)
+print("Fish Notifications: ACTIVE")
+print("=================================")
