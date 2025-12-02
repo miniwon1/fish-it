@@ -6,7 +6,7 @@
 -------------------------------------------
 
 -- Load Rayfield UI Library
-local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))() 
 
 -------------------------------------------
 ----- Services & Core Variables
