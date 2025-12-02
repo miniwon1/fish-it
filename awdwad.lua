@@ -1,7 +1,7 @@
 -------------------------------------------
------ Fish It FAST & RELIABLE v5.1
------ Smart Speed + Guaranteed Catch
------ Fixed Minigame Timing
+----- Fish It TRUE COMPLETE v6.0
+----- Wait for Fish Animation
+----- Proper Minigame Detection
 -------------------------------------------
 
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
@@ -45,25 +45,22 @@ local unequipRemote = net:WaitForChild("RE/UnequipTool", 10)
 local REReplicateTextEffect = net:WaitForChild("RE/ReplicateTextEffect", 10)
 
 -------------------------------------------
------ Configuration (BALANCED SPEED)
+----- Configuration
 -------------------------------------------
 local Config = {
     AutoFish = false,
     AutoSell = false,
     AutoFavorite = false,
-    FastMode = true,
     
-    -- Smart Timing (Fast but Reliable)
-    EquipDelay = 0.3,
-    ChargeDelay = 0.4,
-    CastDelay = 0.3,
-    AfterBiteDelay = 0.4, -- Wait for GUI to appear
-    AfterMinigameDelay = 1.0, -- Wait for server to process
+    EquipDelay = 0.4,
+    ChargeDelay = 0.5,
+    CastDelay = 0.4,
     
-    -- Minigame Settings
-    MinigameClickSpeed = 0.08,
-    MinigameClicks = 25,
-    MinigameWaitForGUI = 1.0, -- Wait for GUI before spam
+    -- Minigame
+    WaitForGUI = 0.8,
+    ClickSpeed = 0.05,
+    TotalClicks = 50,
+    WaitForAnimation = 3.0, -- Wait for fish animation to appear
     
     LoopDelay = 0.5,
     
@@ -71,12 +68,10 @@ local Config = {
     PerfectCastX = -0.7499996423721313,
     PerfectCastY = 1,
     
-    -- Auto Sell
     SellThreshold = 60,
     SellCooldown = 60,
     LastSellTime = 0,
     
-    -- Auto Favorite
     FavoriteTiers = {
         ["Secret"] = true,
         ["Mythic"] = true,
@@ -85,26 +80,26 @@ local Config = {
 }
 
 -------------------------------------------
------ Rod Delays (REALISTIC)
+----- Rod Delays
 -------------------------------------------
 local RodDelays = {
-    ["Ares Rod"] = 1.5,
-    ["Angler Rod"] = 1.5,
-    ["Ghostfinn Rod"] = 1.5,
-    ["Astral Rod"] = 2.0,
-    ["Chrome Rod"] = 2.5,
-    ["Steampunk Rod"] = 3.0,
-    ["Lucky Rod"] = 3.5,
-    ["Midnight Rod"] = 3.5,
-    ["Demascus Rod"] = 4.0,
-    ["Grass Rod"] = 4.0,
-    ["Luck Rod"] = 4.5,
-    ["Carbon Rod"] = 4.0,
-    ["Lava Rod"] = 4.5,
-    ["Starter Rod"] = 5.0,
+    ["Ares Rod"] = 2.0,
+    ["Angler Rod"] = 2.0,
+    ["Ghostfinn Rod"] = 2.0,
+    ["Astral Rod"] = 2.5,
+    ["Chrome Rod"] = 3.0,
+    ["Steampunk Rod"] = 3.5,
+    ["Lucky Rod"] = 4.0,
+    ["Midnight Rod"] = 4.0,
+    ["Demascus Rod"] = 4.5,
+    ["Grass Rod"] = 4.5,
+    ["Luck Rod"] = 5.0,
+    ["Carbon Rod"] = 4.5,
+    ["Lava Rod"] = 5.0,
+    ["Starter Rod"] = 5.5,
 }
 
-local CurrentRodDelay = 3.0
+local CurrentRodDelay = 4.0
 local CurrentRod = "Unknown"
 
 -------------------------------------------
@@ -112,13 +107,12 @@ local CurrentRod = "Unknown"
 -------------------------------------------
 local Stats = {
     FishCaught = 0,
+    RealFishCaught = 0, -- Fish that actually entered inventory
     TotalSold = 0,
     StartTime = os.time(),
     SessionTime = "0m 0s",
     BiteDetected = 0,
-    SuccessfulCatch = 0,
-    FailedCatch = 0,
-    FishPerMinute = 0
+    AnimationSeen = 0
 }
 
 -------------------------------------------
@@ -132,26 +126,6 @@ end)
 
 for i,v in pairs(getconnections(LocalPlayer.Idled)) do
     v:Disable()
-end
-
--------------------------------------------
------ FPS Boost
--------------------------------------------
-local function BoostFPS()
-    for _, v in pairs(game:GetDescendants()) do
-        pcall(function()
-            if v:IsA("BasePart") then
-                v.Material = Enum.Material.SmoothPlastic
-                v.Reflectance = 0
-            elseif v:IsA("Decal") or v:IsA("Texture") then
-                v.Transparency = 1
-            elseif v:IsA("ParticleEmitter") or v:IsA("Trail") then
-                v.Lifetime = NumberRange.new(0)
-            end
-        end)
-    end
-    settings().Rendering.QualityLevel = "Level01"
-    Rayfield:Notify({Title = "FPS Boost", Content = "Graphics optimized!", Duration = 2, Image = 4483362458})
 end
 
 -------------------------------------------
@@ -180,47 +154,62 @@ end
 -------------------------------------------
 local function UnequipRod()
     pcall(function() unequipRemote:FireServer() end)
-    task.wait(0.2)
-end
-
-local function ForceUnstuck()
-    UnequipRod()
-    pcall(function()
-        for _, tool in pairs(Character:GetChildren()) do
-            if tool:IsA("Tool") then tool:Destroy() end
-        end
-        Humanoid:ChangeState(Enum.HumanoidStateType.Landed)
-    end)
-    task.wait(0.5)
+    task.wait(0.3)
 end
 
 -------------------------------------------
------ MINIGAME GUI DETECTOR (IMPROVED)
+----- FISH ANIMATION DETECTOR (CRITICAL!)
+-------------------------------------------
+-- Listen for SUCCESS text effects (fish caught animation)
+local FishAnimationDetected = false
+
+REReplicateTextEffect.OnClientEvent:Connect(function(data)
+    if not data or not data.TextData then return end
+    
+    -- Detect "Exclaim" = Fish bite
+    if data.TextData.EffectType == "Exclaim" then
+        local myHead = Character and Character:FindFirstChild("Head")
+        if myHead and data.Container == myHead then
+            -- Fish bite will be handled separately
+            return
+        end
+    end
+    
+    -- Detect other effects that might indicate success
+    -- Some games show "+" or "Success" or item name
+    pcall(function()
+        local effectText = data.TextData.Text or ""
+        local effectType = data.TextData.EffectType or ""
+        
+        -- Log all effects for debugging
+        print("[EFFECT] Type:", effectType, "| Text:", effectText)
+        
+        -- Common success indicators
+        if effectType == "Plus" or effectType == "Success" or effectType == "Caught" then
+            FishAnimationDetected = true
+            Stats.AnimationSeen = Stats.AnimationSeen + 1
+            print("[ANIMATION] Fish animation detected!")
+        end
+    end)
+end)
+
+-------------------------------------------
+----- MINIGAME GUI HANDLER
 -------------------------------------------
 local function FindMinigameGUI()
     local playerGui = LocalPlayer:WaitForChild("PlayerGui")
     
-    -- Try specific names first
-    local possibleNames = {
-        "FishingMinigame",
-        "Minigame",
-        "ReelGame",
-        "FishGame",
-        "CatchGame",
-        "FishingGame"
-    }
-    
-    for _, name in ipairs(possibleNames) do
+    -- Try specific names
+    for _, name in ipairs({"FishingMinigame", "Minigame", "ReelGame", "FishGame", "CatchGame"}) do
         local gui = playerGui:FindFirstChild(name)
         if gui and gui:IsA("ScreenGui") and gui.Enabled then
             return gui
         end
     end
     
-    -- Search all enabled GUIs
+    -- Search for any GUI with button
     for _, gui in pairs(playerGui:GetChildren()) do
-        if gui:IsA("ScreenGui") and gui.Enabled then
-            -- Must have button or interactive element
+        if gui:IsA("ScreenGui") and gui.Enabled and gui.Name ~= "Rayfield" then
             local hasButton = gui:FindFirstChildOfClass("TextButton", true)
             if hasButton then
                 return gui
@@ -231,64 +220,50 @@ local function FindMinigameGUI()
     return nil
 end
 
-local function InteractWithMinigameGUI(gui)
-    print("[MINIGAME] Interacting with GUI:", gui.Name)
+local function SolveMinigameButton(button)
+    print("[MINIGAME] Solving button:", button.Name)
     
-    -- Find button
-    local button = gui:FindFirstChildOfClass("TextButton", true)
-    
-    if button then
-        print("[MINIGAME] Found button:", button.Name, "| Visible:", button.Visible)
-        
-        -- Smart clicking with proper timing
-        for i = 1, Config.MinigameClicks do
-            if not button or not button.Visible then
-                print("[MINIGAME] Button disappeared, stopping clicks")
-                break
+    -- Method: Rapid fire all button events
+    for i = 1, Config.TotalClicks do
+        pcall(function()
+            -- Fire all MouseButton1 connections
+            for _, conn in pairs(getconnections(button.MouseButton1Click)) do
+                conn:Fire()
+            end
+            for _, conn in pairs(getconnections(button.MouseButton1Down)) do
+                conn:Fire()
+            end
+            for _, conn in pairs(getconnections(button.MouseButton1Up)) do
+                conn:Fire()
+            end
+            for _, conn in pairs(getconnections(button.Activated)) do
+                conn:Fire()
             end
             
-            pcall(function()
-                -- Method 1: Fire all connections
-                for _, connection in pairs(getconnections(button.MouseButton1Click)) do
-                    connection:Fire()
-                end
-                for _, connection in pairs(getconnections(button.MouseButton1Down)) do
-                    connection:Fire()
-                end
-                
-                -- Method 2: Virtual click at button position
-                local absPos = button.AbsolutePosition
-                local absSize = button.AbsoluteSize
-                local center = Vector2.new(absPos.X + absSize.X/2, absPos.Y + absSize.Y/2)
-                
-                VirtualUser:Button1Down(center)
-                task.wait(0.01)
-                VirtualUser:Button1Up(center)
-                
-                -- Method 3: Space key as backup
-                VirtualUser:TypeKey(" ")
-            end)
+            -- Virtual click at button position
+            local pos = button.AbsolutePosition
+            local size = button.AbsoluteSize
+            local center = Vector2.new(pos.X + size.X/2, pos.Y + size.Y/2)
+            VirtualUser:Button1Down(center)
+            task.wait(0.005)
+            VirtualUser:Button1Up(center)
             
-            task.wait(Config.MinigameClickSpeed)
-        end
-        
-        print("[MINIGAME] Completed " .. Config.MinigameClicks .. " clicks")
-        return true
-    else
-        print("[MINIGAME] No button found, trying space spam")
-        
-        -- Fallback: space spam
-        for i = 1, Config.MinigameClicks do
+            -- Keyboard backup
             VirtualUser:TypeKey(" ")
-            task.wait(Config.MinigameClickSpeed)
-        end
+        end)
         
-        return false
+        task.wait(Config.ClickSpeed)
+        
+        -- Check if button disappeared (minigame solved)
+        if not button.Visible or not button.Parent then
+            print("[MINIGAME] Button disappeared - minigame likely solved!")
+            break
+        end
     end
 end
 
 -------------------------------------------
------ SMART MINIGAME HANDLER
+----- SMART MINIGAME COMPLETION
 -------------------------------------------
 local FishingState = {
     Active = false,
@@ -298,55 +273,77 @@ local FishingState = {
 }
 
 local function CompleteMinigame()
-    if FishingState.ProcessingMinigame then 
-        print("[MINIGAME] Already processing, skipping")
-        return 
-    end
-    
+    if FishingState.ProcessingMinigame then return end
     FishingState.ProcessingMinigame = true
-    print("[MINIGAME] Starting minigame completion...")
+    FishAnimationDetected = false
     
-    -- CRITICAL: Wait for GUI to fully appear
-    task.wait(Config.MinigameWaitForGUI)
+    print("[MINIGAME] Starting...")
     
-    -- Try to find GUI
+    -- Wait for GUI to appear
+    task.wait(Config.WaitForGUI)
+    
+    -- Try to find minigame GUI
     local gui = FindMinigameGUI()
     
     if gui then
-        print("[MINIGAME] GUI found:", gui.Name)
-        InteractWithMinigameGUI(gui)
-    else
-        print("[MINIGAME] No GUI detected, using fallback")
+        print("[MINIGAME] Found GUI:", gui.Name)
         
-        -- Fallback method with proper timing
-        for i = 1, Config.MinigameClicks do
-            pcall(function()
-                finishRemote:FireServer()
-                VirtualUser:Button1Down(Vector2.new(0,0))
-                task.wait(0.01)
-                VirtualUser:Button1Up(Vector2.new(0,0))
-                VirtualUser:TypeKey(" ")
-            end)
-            task.wait(Config.MinigameClickSpeed)
+        local button = gui:FindFirstChildOfClass("TextButton", true)
+        if button then
+            SolveMinigameButton(button)
+        else
+            print("[MINIGAME] No button in GUI, using fallback")
         end
+    else
+        print("[MINIGAME] No GUI found, using direct method")
     end
     
-    -- CRITICAL: Send finish signals properly
-    print("[MINIGAME] Sending final finish signals...")
-    task.wait(0.3)
-    for i = 1, 5 do
-        pcall(function() 
+    -- Fallback: Spam all possible inputs
+    for i = 1, 30 do
+        pcall(function()
+            finishRemote:FireServer()
+            VirtualUser:Button1Down(Vector2.new(0,0))
+            task.wait(0.01)
+            VirtualUser:Button1Up(Vector2.new(0,0))
+            VirtualUser:TypeKey(" ")
+            VirtualUser:TypeKey("e")
+        end)
+        task.wait(0.08)
+    end
+    
+    -- Send final finish signals
+    print("[MINIGAME] Sending finish signals...")
+    for i = 1, 10 do
+        pcall(function()
             finishRemote:FireServer()
         end)
+        task.wait(0.05)
+    end
+    
+    -- CRITICAL: Wait for fish animation
+    print("[MINIGAME] Waiting for fish animation (max " .. Config.WaitForAnimation .. "s)...")
+    local animStart = tick()
+    
+    while not FishAnimationDetected and (tick() - animStart) < Config.WaitForAnimation do
         task.wait(0.1)
     end
     
-    -- CRITICAL: Wait for server to process and add fish to inventory
-    print("[MINIGAME] Waiting for server to process...")
-    task.wait(Config.AfterMinigameDelay)
+    if FishAnimationDetected then
+        print("[SUCCESS] Fish animation detected! Fish entered inventory!")
+        Stats.RealFishCaught = Stats.RealFishCaught + 1
+        
+        Rayfield:Notify({
+            Title = "Fish Caught!",
+            Content = "Real fish: " .. Stats.RealFishCaught,
+            Duration = 2,
+            Image = 4483362458,
+        })
+    else
+        print("[WARNING] No fish animation detected - fish may not have entered inventory")
+    end
     
     FishingState.ProcessingMinigame = false
-    print("[MINIGAME] Minigame complete!")
+    print("[MINIGAME] Complete!")
 end
 
 -------------------------------------------
@@ -366,36 +363,21 @@ REReplicateTextEffect.OnClientEvent:Connect(function(data)
     FishingState.WaitingForBite = false
     
     task.spawn(function()
-        -- CRITICAL: Small delay before starting minigame
-        task.wait(Config.AfterBiteDelay)
+        task.wait(0.4)
         
-        local success = pcall(function()
+        pcall(function()
             CompleteMinigame()
         end)
         
-        if success then
-            Stats.SuccessfulCatch = Stats.SuccessfulCatch + 1
-            Stats.FishCaught = Stats.FishCaught + 1
-            print("[SUCCESS] Fish caught successfully! Total: " .. Stats.FishCaught)
-            
-            Rayfield:Notify({
-                Title = "Fish Caught!",
-                Content = "Total: " .. Stats.FishCaught,
-                Duration = 2,
-                Image = 4483362458,
-            })
-        else
-            Stats.FailedCatch = Stats.FailedCatch + 1
-            print("[FAIL] Failed to catch fish")
-        end
+        Stats.FishCaught = Stats.FishCaught + 1
         
-        task.wait(0.3)
+        task.wait(0.5)
         FishingState.FishBit = false
     end)
 end)
 
 -------------------------------------------
------ MAIN AUTO FISHING (SMART SPEED)
+----- MAIN AUTO FISHING
 -------------------------------------------
 local function StartAutoFish()
     if Config.AutoFish then return end
@@ -404,7 +386,7 @@ local function StartAutoFish()
     
     Rayfield:Notify({
         Title = "Auto Fish Started",
-        Content = "Rod: " .. CurrentRod .. " | Fast Mode",
+        Content = "Rod: " .. CurrentRod,
         Duration = 3,
         Image = 4483362458,
     })
@@ -420,55 +402,40 @@ local function StartAutoFish()
                     return
                 end
                 
-                print("[CYCLE] Starting new fishing cycle")
+                print("[CYCLE] New fishing cycle")
                 
                 FishingState.Active = true
                 FishingState.WaitingForBite = false
                 FishingState.FishBit = false
                 
-                -- Unequip
                 UnequipRod()
                 
-                -- Equip
-                print("[CYCLE] Equipping rod")
                 equipRemote:FireServer(1)
                 task.wait(Config.EquipDelay)
                 
-                -- Charge
-                print("[CYCLE] Charging rod")
                 local timestamp = workspace:GetServerTimeNow()
                 pcall(function() rodRemote:InvokeServer(timestamp) end)
                 task.wait(Config.ChargeDelay)
                 
-                -- Cast
-                print("[CYCLE] Casting rod")
                 local x = Config.PerfectCastX + (math.random(-100, 100) / 100000000)
                 local y = Config.PerfectCastY + (math.random(-100, 100) / 100000000)
                 
                 pcall(function() miniGameRemote:InvokeServer(x, y) end)
                 task.wait(Config.CastDelay)
                 
-                print("[CYCLE] Waiting for fish bite (max " .. CurrentRodDelay .. "s)")
                 FishingState.WaitingForBite = true
                 
-                -- Wait for fish
                 local waitStart = tick()
-                local maxWait = Config.FastMode and (CurrentRodDelay + 2) or (CurrentRodDelay + 5)
+                local maxWait = CurrentRodDelay + 3
                 
                 while FishingState.WaitingForBite and not FishingState.FishBit and (tick() - waitStart) < maxWait do
                     task.wait(0.2)
                 end
                 
-                -- Wait for minigame if fish bit
                 if FishingState.FishBit then
-                    print("[CYCLE] Fish bit! Waiting for minigame completion...")
-                    local minigameStart = tick()
-                    while FishingState.ProcessingMinigame and (tick() - minigameStart) < 5 do
+                    while FishingState.ProcessingMinigame do
                         task.wait(0.2)
                     end
-                    print("[CYCLE] Minigame finished")
-                else
-                    print("[CYCLE] No bite detected (timeout)")
                 end
                 
                 FishingState.Active = false
@@ -478,15 +445,6 @@ local function StartAutoFish()
         end
         
         UnequipRod()
-        
-        Rayfield:Notify({
-            Title = "Auto Fish Stopped",
-            Content = string.format("Caught: %d | Failed: %d | Rate: %.1f%%", 
-                Stats.SuccessfulCatch, Stats.FailedCatch,
-                Stats.BiteDetected > 0 and (Stats.SuccessfulCatch / Stats.BiteDetected * 100) or 0),
-            Duration = 5,
-            Image = 4483362458,
-        })
     end)
 end
 
@@ -500,7 +458,7 @@ local function StopAutoFish()
 end
 
 -------------------------------------------
------ AUTO SELL
+----- AUTO SELL & FAVORITE (Same as before)
 -------------------------------------------
 local function StartAutoSell()
     task.spawn(function()
@@ -532,9 +490,6 @@ local function StartAutoSell()
     end)
 end
 
--------------------------------------------
------ AUTO FAVORITE
--------------------------------------------
 local function StartAutoFavorite()
     task.spawn(function()
         while Config.AutoFavorite do
@@ -564,10 +519,6 @@ task.spawn(function()
     while task.wait(1) do
         local elapsed = os.time() - Stats.StartTime
         Stats.SessionTime = string.format("%dm %ds", math.floor(elapsed / 60), elapsed % 60)
-        
-        if elapsed > 0 then
-            Stats.FishPerMinute = (Stats.FishCaught / elapsed) * 60
-        end
     end
 end)
 
@@ -575,28 +526,20 @@ end)
 ----- UI
 -------------------------------------------
 local Window = Rayfield:CreateWindow({
-    Name = "Fish It - FAST v5.1",
+    Name = "Fish It - TRUE v6.0",
     LoadingTitle = "Loading...",
-    LoadingSubtitle = "Fast & Reliable",
-    ConfigurationSaving = {Enabled = true, FolderName = "FishItFast", FileName = "FastConfig"},
+    LoadingSubtitle = "Animation Detection",
+    ConfigurationSaving = {Enabled = true, FolderName = "FishItTrue", FileName = "TrueConfig"},
     Discord = {Enabled = false},
     KeySystem = false,
 })
 
-Rayfield:Notify({Title = "FAST & RELIABLE v5.1", Content = "Smart timing active!", Duration = 3, Image = 4483362458})
-
 local MainTab = Window:CreateTab("🎣 Auto Fish", 4483362458)
 
 MainTab:CreateToggle({
-    Name = "Auto Fish (Fast & Reliable)",
+    Name = "Auto Fish (Animation Check)",
     CurrentValue = false,
     Callback = function(v) if v then StartAutoFish() else StopAutoFish() end end,
-})
-
-MainTab:CreateToggle({
-    Name = "Fast Mode",
-    CurrentValue = true,
-    Callback = function(v) Config.FastMode = v end,
 })
 
 MainTab:CreateToggle({
@@ -606,32 +549,30 @@ MainTab:CreateToggle({
 })
 
 MainTab:CreateSlider({
-    Name = "Loop Delay",
-    Range = {0.3, 2},
-    Increment = 0.1,
-    CurrentValue = 0.5,
-    Callback = function(v) Config.LoopDelay = v end,
+    Name = "Wait for Animation (seconds)",
+    Range = {1, 5},
+    Increment = 0.5,
+    CurrentValue = 3.0,
+    Callback = function(v) Config.WaitForAnimation = v end,
 })
 
 MainTab:CreateSlider({
-    Name = "After Minigame Wait (Important!)",
-    Range = {0.5, 2},
-    Increment = 0.1,
-    CurrentValue = 1.0,
-    Callback = function(v) Config.AfterMinigameDelay = v end,
+    Name = "Total Clicks",
+    Range = {30, 80},
+    Increment = 10,
+    CurrentValue = 50,
+    Callback = function(v) Config.TotalClicks = v end,
 })
 
 local StatsLabel = MainTab:CreateLabel("Loading...")
 
 task.spawn(function()
     while task.wait(1) do
-        local successRate = Stats.BiteDetected > 0 and math.floor((Stats.SuccessfulCatch / Stats.BiteDetected) * 100) or 0
-        StatsLabel:Set(string.format("🐟 Fish: %d | ✅ Success: %d%% | ⚡ %.1f/min | ⏱️ %s", 
-            Stats.FishCaught, successRate, Stats.FishPerMinute, Stats.SessionTime))
+        local realRate = Stats.BiteDetected > 0 and math.floor((Stats.RealFishCaught / Stats.BiteDetected) * 100) or 0
+        StatsLabel:Set(string.format("🐟 Real Fish: %d | 🎣 Bites: %d | ✅ Rate: %d%% | 🎬 Animations: %d | ⏱️ %s", 
+            Stats.RealFishCaught, Stats.BiteDetected, realRate, Stats.AnimationSeen, Stats.SessionTime))
     end
 end)
-
-MainTab:CreateButton({Name = "Force Unstuck", Callback = function() ForceUnstuck() end})
 
 local AutoTab = Window:CreateTab("⚙️ Automation", 4483362458)
 
@@ -645,33 +586,17 @@ AutoTab:CreateToggle({Name = "Favorite: Legendary", CurrentValue = true, Callbac
 
 local UtilityTab = Window:CreateTab("🔧 Utility", 4483362458)
 
-UtilityTab:CreateButton({Name = "Boost FPS", Callback = function() BoostFPS() end})
 UtilityTab:CreateButton({Name = "Rejoin", Callback = function() TeleportService:Teleport(game.PlaceId, LocalPlayer) end})
 UtilityTab:CreateButton({Name = "Detect Rod", Callback = function() 
     GetCurrentRod()
-    Rayfield:Notify({Title = "Rod Info", Content = CurrentRod .. " | " .. CurrentRodDelay .. "s", Duration = 2, Image = 4483362458})
-end})
-
-UtilityTab:CreateButton({Name = "Reset Stats", Callback = function()
-    Stats.FishCaught = 0
-    Stats.TotalSold = 0
-    Stats.BiteDetected = 0
-    Stats.SuccessfulCatch = 0
-    Stats.FailedCatch = 0
-    Stats.StartTime = os.time()
-    Rayfield:Notify({Title = "Stats Reset", Content = "Cleared!", Duration = 2, Image = 4483362458})
+    Rayfield:Notify({Title = "Rod Info", Content = CurrentRod, Duration = 2, Image = 4483362458})
 end})
 
 local SettingsTab = Window:CreateTab("⚙️ Settings", 4483362458)
-SettingsTab:CreateLabel("Version: 5.1 FAST & RELIABLE")
-SettingsTab:CreateLabel("Mode: Smart Timing")
-SettingsTab:CreateLabel("Feature: Guaranteed Catch")
+SettingsTab:CreateLabel("Version: 6.0 TRUE COMPLETE")
+SettingsTab:CreateLabel("Feature: Animation Detection")
+SettingsTab:CreateLabel("Check F9 for detailed logs")
 SettingsTab:CreateButton({Name = "Destroy GUI", Callback = function() StopAutoFish(); task.wait(0.5); Rayfield:Destroy() end})
 
 GetCurrentRod()
-print("=================================")
-print("Fish It FAST & RELIABLE v5.1")
-print("Rod: " .. CurrentRod)
-print("Mode: SMART SPEED")
-print("Press F9 for debug logs")
-print("=================================")
+print("Fish It TRUE COMPLETE v6.0 | Press F9 for logs | Rod: " .. CurrentRod)
