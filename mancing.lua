@@ -1,7 +1,7 @@
 -------------------------------------------
------ Fish It SPEED Edition - FIXED
------ All Bugs Resolved
------ Version: 2.1
+----- Fish It ULTIMATE Edition - No Stuck
+----- Anti-Stuck System + Working Teleport
+----- Version: 2.2
 -------------------------------------------
 
 -- Load Rayfield UI Library
@@ -18,12 +18,20 @@ local HttpService = game:GetService("HttpService")
 local LocalPlayer = Players.LocalPlayer
 local VirtualUser = game:GetService("VirtualUser")
 
--- Wait for character
+-- Character handling with refresh
 local Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 local Humanoid = Character:WaitForChild("Humanoid")
 local HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
 
--- Net Remote Paths (with error handling)
+-- Update character reference on respawn
+LocalPlayer.CharacterAdded:Connect(function(char)
+    Character = char
+    Humanoid = char:WaitForChild("Humanoid")
+    HumanoidRootPart = char:WaitForChild("HumanoidRootPart")
+    task.wait(2) -- Wait for character to fully load
+end)
+
+-- Net Remote Paths
 local success, net = pcall(function()
     return ReplicatedStorage:WaitForChild("Packages", 10)
         :WaitForChild("_Index", 10)
@@ -41,6 +49,7 @@ local rodRemote = net:WaitForChild("RF/ChargeFishingRod", 10)
 local miniGameRemote = net:WaitForChild("RF/RequestFishingMinigameStarted", 10)
 local finishRemote = net:WaitForChild("RE/FishingCompleted", 10)
 local equipRemote = net:WaitForChild("RE/EquipToolFromHotbar", 10)
+local unequipRemote = net:WaitForChild("RE/UnequipTool", 10) -- ADDED: Unequip remote
 
 -- Text Effect for Fish Detection
 local REReplicateTextEffect = net:WaitForChild("RE/ReplicateTextEffect", 10)
@@ -52,13 +61,15 @@ local Config = {
     AutoFish = false,
     AutoSell = false,
     AutoFavorite = false,
+    AntiStuck = true, -- NEW: Anti-stuck system
     
-    -- Speed Settings (Adjusted for stability)
+    -- Speed Settings
     EquipDelay = 0.3,
     ChargeDelay = 0.5,
     CastDelay = 0.3,
     CatchDelay = 0.15,
     LoopDelay = 0.5,
+    UnstuckDelay = 10, -- Check for stuck every 10 seconds
     
     -- Perfect Cast
     PerfectCast = true,
@@ -79,7 +90,7 @@ local Config = {
 }
 
 -------------------------------------------
------ Rod Delay Configuration (Fixed)
+----- Rod Delay Configuration
 -------------------------------------------
 local RodDelays = {
     ["Ares Rod"] = 1.5,
@@ -109,7 +120,8 @@ local Stats = {
     TotalSold = 0,
     StartTime = os.time(),
     SessionTime = "0m 0s",
-    Errors = 0
+    Errors = 0,
+    UnstuckCount = 0
 }
 
 -------------------------------------------
@@ -184,7 +196,87 @@ local function BoostFPS()
 end
 
 -------------------------------------------
------ Rod Detection (Fixed)
+----- ANTI-STUCK SYSTEM (NEW)
+-------------------------------------------
+local StuckDetector = {
+    LastPosition = nil,
+    StuckTime = 0,
+    CheckInterval = 5
+}
+
+local function UnequipRod()
+    pcall(function()
+        unequipRemote:FireServer()
+    end)
+    task.wait(0.5)
+end
+
+local function ForceUnstuck()
+    Stats.UnstuckCount = Stats.UnstuckCount + 1
+    
+    Rayfield:Notify({
+        Title = "Anti-Stuck",
+        Content = "Unstucking character...",
+        Duration = 2,
+        Image = 4483362458,
+    })
+    
+    -- Method 1: Unequip all tools
+    UnequipRod()
+    
+    -- Method 2: Delete fishing rod from character if stuck
+    pcall(function()
+        for _, tool in pairs(Character:GetChildren()) do
+            if tool:IsA("Tool") and string.find(tool.Name:lower(), "rod") then
+                tool:Destroy()
+            end
+        end
+    end)
+    
+    -- Method 3: Reset humanoid state
+    pcall(function()
+        Humanoid:ChangeState(Enum.HumanoidStateType.Landed)
+    end)
+    
+    -- Method 4: Small position adjustment
+    pcall(function()
+        HumanoidRootPart.CFrame = HumanoidRootPart.CFrame + Vector3.new(0, 2, 0)
+    end)
+    
+    task.wait(1)
+end
+
+-- Anti-stuck monitor
+task.spawn(function()
+    while task.wait(StuckDetector.CheckInterval) do
+        if Config.AntiStuck and Config.AutoFish then
+            pcall(function()
+                local currentPos = HumanoidRootPart.Position
+                
+                if StuckDetector.LastPosition then
+                    local distance = (currentPos - StuckDetector.LastPosition).Magnitude
+                    
+                    -- If character hasn't moved and is not fishing actively
+                    if distance < 0.5 then
+                        StuckDetector.StuckTime = StuckDetector.StuckTime + StuckDetector.CheckInterval
+                        
+                        if StuckDetector.StuckTime >= Config.UnstuckDelay then
+                            ForceUnstuck()
+                            StuckDetector.StuckTime = 0
+                        end
+                    else
+                        StuckDetector.StuckTime = 0
+                    end
+                end
+                
+                StuckDetector.LastPosition = currentPos
+            end)
+        end
+    end
+end)
+
+-------------------------------------------
+----- Rod Detection
 -------------------------------------------
 local function GetCurrentRod()
     local success = pcall(function()
@@ -234,12 +326,13 @@ WatchRodChanges()
 GetCurrentRod()
 
 -------------------------------------------
------ FIXED INSTANT CATCH SYSTEM
+----- INSTANT CATCH SYSTEM
 -------------------------------------------
 local FishingState = {
     Active = false,
     Catching = false,
-    LastCatchTime = 0
+    LastCatchTime = 0,
+    CastTime = 0
 }
 
 REReplicateTextEffect.OnClientEvent:Connect(function(data)
@@ -247,15 +340,12 @@ REReplicateTextEffect.OnClientEvent:Connect(function(data)
     if not FishingState.Active then return end
     if FishingState.Catching then return end
     
-    -- Validate data
     if not data or not data.TextData then return end
     if data.TextData.EffectType ~= "Exclaim" then return end
     
-    -- Check if effect is on player's head
     local myHead = Character and Character:FindFirstChild("Head")
     if not myHead or data.Container ~= myHead then return end
     
-    -- Prevent spam catching
     local currentTime = tick()
     if currentTime - FishingState.LastCatchTime < 0.5 then return end
     
@@ -263,7 +353,6 @@ REReplicateTextEffect.OnClientEvent:Connect(function(data)
     FishingState.LastCatchTime = currentTime
     
     task.spawn(function()
-        -- Spam finish remote for instant catch
         for i = 1, 3 do
             pcall(function()
                 finishRemote:FireServer()
@@ -278,7 +367,7 @@ REReplicateTextEffect.OnClientEvent:Connect(function(data)
 end)
 
 -------------------------------------------
------ FIXED AUTO FISHING SYSTEM
+----- FIXED AUTO FISHING WITH ANTI-STUCK
 -------------------------------------------
 local function StartFastAutoFish()
     if Config.AutoFish then 
@@ -296,7 +385,7 @@ local function StartFastAutoFish()
     
     Rayfield:Notify({
         Title = "Auto Fish Started",
-        Content = "Rod: " .. CurrentRod .. " | Delay: " .. CurrentRodDelay .. "s",
+        Content = "Rod: " .. CurrentRod .. " | Anti-Stuck: ON",
         Duration = 3,
         Image = 4483362458,
     })
@@ -304,14 +393,23 @@ local function StartFastAutoFish()
     task.spawn(function()
         while Config.AutoFish do
             local success, err = pcall(function()
-                -- Ensure character exists
+                -- Verify character exists
                 if not Character or not Character.Parent then
                     Character = LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
-                    task.wait(1)
+                    Humanoid = Character:WaitForChild("Humanoid")
+                    HumanoidRootPart = Character:WaitForChild("HumanoidRootPart")
+                    task.wait(2)
                     return
                 end
                 
+                -- Check if stuck (timeout protection)
+                local timeout = tick()
                 FishingState.Active = true
+                FishingState.CastTime = tick()
+                
+                -- Step 0: Ensure previous rod is unequipped
+                UnequipRod()
+                task.wait(0.2)
                 
                 -- Step 1: Equip Rod
                 equipRemote:FireServer(1)
@@ -324,7 +422,8 @@ local function StartFastAutoFish()
                 end)
                 
                 if not chargeSuccess then
-                    warn("Failed to charge rod")
+                    warn("Failed to charge rod, unstucking...")
+                    ForceUnstuck()
                     Stats.Errors = Stats.Errors + 1
                     task.wait(1)
                     return
@@ -332,14 +431,12 @@ local function StartFastAutoFish()
                 
                 task.wait(Config.ChargeDelay)
                 
-                -- Step 3: Cast Rod with Perfect Cast
+                -- Step 3: Cast Rod
                 local x, y
                 if Config.PerfectCast then
-                    -- Perfect cast coordinates with slight randomization
                     x = Config.PerfectCastX + (math.random(-100, 100) / 100000000)
                     y = Config.PerfectCastY + (math.random(-100, 100) / 100000000)
                 else
-                    -- Random cast
                     x = math.random(-1000, 1000) / 1000
                     y = math.random(0, 1000) / 1000
                 end
@@ -349,7 +446,8 @@ local function StartFastAutoFish()
                 end)
                 
                 if not castSuccess then
-                    warn("Failed to cast rod")
+                    warn("Failed to cast rod, unstucking...")
+                    ForceUnstuck()
                     Stats.Errors = Stats.Errors + 1
                     task.wait(1)
                     return
@@ -357,8 +455,19 @@ local function StartFastAutoFish()
                 
                 task.wait(Config.CastDelay)
                 
-                -- Wait for fish bite (based on rod delay)
-                task.wait(CurrentRodDelay)
+                -- Wait for fish with timeout protection
+                local waitStart = tick()
+                local maxWaitTime = CurrentRodDelay + 3
+                
+                while FishingState.Active and (tick() - waitStart) < maxWaitTime do
+                    task.wait(0.1)
+                end
+                
+                -- Timeout protection
+                if (tick() - waitStart) >= maxWaitTime then
+                    warn("Fishing timeout, forcing unstuck...")
+                    ForceUnstuck()
+                end
                 
                 FishingState.Active = false
             end)
@@ -368,16 +477,19 @@ local function StartFastAutoFish()
                 Stats.Errors = Stats.Errors + 1
                 FishingState.Active = false
                 FishingState.Catching = false
+                ForceUnstuck()
                 task.wait(2)
             end
             
-            -- Loop delay
             task.wait(Config.LoopDelay)
         end
         
+        -- Cleanup on stop
+        UnequipRod()
+        
         Rayfield:Notify({
             Title = "Auto Fish Stopped",
-            Content = "Caught: " .. Stats.FishCaught .. " | Errors: " .. Stats.Errors,
+            Content = string.format("Caught: %d | Unstuck: %d", Stats.FishCaught, Stats.UnstuckCount),
             Duration = 3,
             Image = 4483362458,
         })
@@ -388,16 +500,90 @@ local function StopFastAutoFish()
     Config.AutoFish = false
     FishingState.Active = false
     FishingState.Catching = false
+    UnequipRod()
 end
 
 -------------------------------------------
------ AUTO SELL (Fixed)
+----- FIXED TELEPORT SYSTEM
+-------------------------------------------
+local function SafeTeleport(position, locationName)
+    local success = pcall(function()
+        -- Stop auto fish during teleport
+        local wasAutoFishing = Config.AutoFish
+        if wasAutoFishing then
+            StopFastAutoFish()
+            task.wait(0.5)
+        end
+        
+        -- Unequip rod before teleport
+        UnequipRod()
+        task.wait(0.3)
+        
+        -- Get fresh character reference
+        local char = workspace:FindFirstChild("Characters")
+        if not char then
+            error("Characters folder not found")
+        end
+        
+        char = char:FindFirstChild(LocalPlayer.Name)
+        if not char then
+            error("Character not found in workspace")
+        end
+        
+        local hrp = char:FindFirstChild("HumanoidRootPart")
+        if not hrp then
+            error("HumanoidRootPart not found")
+        end
+        
+        -- Disable character collision temporarily
+        for _, part in pairs(char:GetDescendants()) do
+            if part:IsA("BasePart") then
+                part.CanCollide = false
+            end
+        end
+        
+        -- Teleport with offset
+        hrp.CFrame = CFrame.new(position + Vector3.new(0, 10, 0))
+        task.wait(0.5)
+        
+        -- Re-enable collision
+        for _, part in pairs(char:GetDescendants()) do
+            if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" then
+                part.CanCollide = true
+            end
+        end
+        
+        Rayfield:Notify({
+            Title = "Teleported",
+            Content = "Now at: " .. locationName,
+            Duration = 3,
+            Image = 4483362458,
+        })
+        
+        -- Resume auto fish if was active
+        if wasAutoFishing then
+            task.wait(1)
+            StartFastAutoFish()
+        end
+    end)
+    
+    if not success then
+        Rayfield:Notify({
+            Title = "Teleport Failed",
+            Content = "Please try again in a moment",
+            Duration = 3,
+            Image = 4483362458,
+        })
+    end
+end
+
+-------------------------------------------
+----- AUTO SELL
 -------------------------------------------
 local function StartAutoSell()
     task.spawn(function()
         while Config.AutoSell do
             local success = pcall(function()
-                -- Wait for Replion to load
                 if not _G.Replion then
                     task.wait(5)
                     return
@@ -448,7 +634,7 @@ local function StartAutoSell()
 end
 
 -------------------------------------------
------ AUTO FAVORITE (Fixed)
+----- AUTO FAVORITE
 -------------------------------------------
 local function StartAutoFavorite()
     task.spawn(function()
@@ -502,13 +688,13 @@ end)
 ----- CREATE UI
 -------------------------------------------
 local Window = Rayfield:CreateWindow({
-    Name = "Fish It - FIXED Edition v2.1",
-    LoadingTitle = "Loading Fixed Module...",
-    LoadingSubtitle = "All Bugs Resolved",
+    Name = "Fish It - ULTIMATE v2.2",
+    LoadingTitle = "Loading Ultimate Edition...",
+    LoadingSubtitle = "Anti-Stuck + Fixed Teleport",
     ConfigurationSaving = {
         Enabled = true,
-        FolderName = "FishItFixed",
-        FileName = "FixedConfig"
+        FolderName = "FishItUltimate",
+        FileName = "UltimateConfig"
     },
     Discord = {
         Enabled = false,
@@ -517,8 +703,8 @@ local Window = Rayfield:CreateWindow({
 })
 
 Rayfield:Notify({
-    Title = "Fixed Edition Loaded",
-    Content = "All bugs resolved! Ready to fish!",
+    Title = "Ultimate Edition Loaded",
+    Content = "Anti-Stuck System Active!",
     Duration = 5,
     Image = 4483362458,
 })
@@ -527,10 +713,10 @@ Rayfield:Notify({
 ----- MAIN TAB
 -------------------------------------------
 local MainTab = Window:CreateTab("🎣 Auto Fish", 4483362458)
-local MainSection = MainTab:CreateSection("Fixed Fishing System")
+local MainSection = MainTab:CreateSection("Ultimate Fishing System")
 
 local AutoFishToggle = MainTab:CreateToggle({
-    Name = "Auto Fish (Fixed)",
+    Name = "Auto Fish (Anti-Stuck)",
     CurrentValue = false,
     Flag = "AutoFishToggle",
     Callback = function(Value)
@@ -551,10 +737,19 @@ local PerfectCastToggle = MainTab:CreateToggle({
     end,
 })
 
+local AntiStuckToggle = MainTab:CreateToggle({
+    Name = "Anti-Stuck System",
+    CurrentValue = true,
+    Flag = "AntiStuckToggle",
+    Callback = function(Value)
+        Config.AntiStuck = Value
+    end,
+})
+
 local SpeedSection = MainTab:CreateSection("Speed Configuration")
 
 local LoopDelaySlider = MainTab:CreateSlider({
-    Name = "Loop Delay (Higher = More Stable)",
+    Name = "Loop Delay (Stability)",
     Range = {0.3, 2},
     Increment = 0.1,
     CurrentValue = 0.5,
@@ -564,14 +759,14 @@ local LoopDelaySlider = MainTab:CreateSlider({
     end,
 })
 
-local CatchDelaySlider = MainTab:CreateSlider({
-    Name = "Catch Response Time",
-    Range = {0.1, 0.5},
-    Increment = 0.05,
-    CurrentValue = 0.15,
-    Flag = "CatchDelay",
+local UnstuckDelaySlider = MainTab:CreateSlider({
+    Name = "Unstuck Check Interval",
+    Range = {5, 30},
+    Increment = 5,
+    CurrentValue = 10,
+    Flag = "UnstuckDelay",
     Callback = function(Value)
-        Config.CatchDelay = Value
+        Config.UnstuckDelay = Value
     end,
 })
 
@@ -581,10 +776,32 @@ local StatsLabel = MainTab:CreateLabel("Loading stats...")
 
 task.spawn(function()
     while task.wait(2) do
-        StatsLabel:Set(string.format("Fish: %d | Sold: %d | Errors: %d | Time: %s", 
-            Stats.FishCaught, Stats.TotalSold, Stats.Errors, Stats.SessionTime))
+        StatsLabel:Set(string.format("Fish: %d | Sold: %d | Unstuck: %d | Time: %s", 
+            Stats.FishCaught, Stats.TotalSold, Stats.UnstuckCount, Stats.SessionTime))
     end
 end)
+
+local ManualSection = MainTab:CreateSection("Manual Controls")
+
+MainTab:CreateButton({
+    Name = "Force Unstuck Now",
+    Callback = function()
+        ForceUnstuck()
+    end,
+})
+
+MainTab:CreateButton({
+    Name = "Unequip Rod",
+    Callback = function()
+        UnequipRod()
+        Rayfield:Notify({
+            Title = "Unequipped",
+            Content = "Rod unequipped successfully",
+            Duration = 2,
+            Image = 4483362458,
+        })
+    end,
+})
 
 -------------------------------------------
 ----- AUTOMATION TAB
@@ -669,10 +886,10 @@ AutoTab:CreateToggle({
 })
 
 -------------------------------------------
------ TELEPORT TAB
+----- TELEPORT TAB (FIXED)
 -------------------------------------------
 local TeleportTab = Window:CreateTab("📍 Teleport", 4483362458)
-local TPSection = TeleportTab:CreateSection("Island Teleport")
+local TPSection = TeleportTab:CreateSection("Safe Island Teleport")
 
 local Islands = {
     ["Kohana (Spawn)"] = Vector3.new(-658, 3, 719),
@@ -694,26 +911,14 @@ local IslandDropdown = TeleportTab:CreateDropdown({
     Callback = function(Option)
         local pos = Islands[Option]
         if pos then
-            pcall(function()
-                local char = workspace:FindFirstChild("Characters")
-                if char then
-                    char = char:FindFirstChild(LocalPlayer.Name)
-                    if char then
-                        local hrp = char:FindFirstChild("HumanoidRootPart")
-                        if hrp then
-                            hrp.CFrame = CFrame.new(pos + Vector3.new(0, 5, 0))
-                            Rayfield:Notify({
-                                Title = "Teleported",
-                                Content = "Now at: " .. Option,
-                                Duration = 3,
-                                Image = 4483362458,
-                            })
-                        end
-                    end
-                end
-            end)
+            SafeTeleport(pos, Option)
         end
     end,
+})
+
+TeleportTab:CreateParagraph({
+    Title = "How to Use",
+    Content = "Select island from dropdown. Auto-fish will pause during teleport and resume after."
 })
 
 -------------------------------------------
@@ -789,6 +994,7 @@ UtilityTab:CreateButton({
         Stats.FishCaught = 0
         Stats.TotalSold = 0
         Stats.Errors = 0
+        Stats.UnstuckCount = 0
         Stats.StartTime = os.time()
         Rayfield:Notify({
             Title = "Stats Reset",
@@ -805,9 +1011,9 @@ UtilityTab:CreateButton({
 local SettingsTab = Window:CreateTab("⚙️ Settings", 4483362458)
 local SettingsSection = SettingsTab:CreateSection("Script Information")
 
-SettingsTab:CreateLabel("Version: 2.1 Fixed Edition")
-SettingsTab:CreateLabel("Status: All Bugs Resolved")
-SettingsTab:CreateLabel("Mode: Stable & Reliable")
+SettingsTab:CreateLabel("Version: 2.2 Ultimate Edition")
+SettingsTab:CreateLabel("Status: Anti-Stuck Active")
+SettingsTab:CreateLabel("Teleport: Fixed & Safe")
 SettingsTab:CreateLabel("UI: Rayfield")
 
 local DestroySection = SettingsTab:CreateSection("Unload")
@@ -818,6 +1024,7 @@ SettingsTab:CreateButton({
         Config.AutoFish = false
         Config.AutoSell = false
         Config.AutoFavorite = false
+        UnequipRod()
         task.wait(0.5)
         Rayfield:Destroy()
     end,
@@ -828,8 +1035,9 @@ SettingsTab:CreateButton({
 -------------------------------------------
 GetCurrentRod()
 print("=================================")
-print("Fish It Fixed Edition v2.1 Loaded")
-print("Rod Detected: " .. CurrentRod)
+print("Fish It Ultimate v2.2 Loaded")
+print("Rod: " .. CurrentRod)
 print("Rod Delay: " .. CurrentRodDelay .. "s")
-print("All systems operational!")
+print("Anti-Stuck: ACTIVE")
+print("Teleport: FIXED")
 print("=================================")
